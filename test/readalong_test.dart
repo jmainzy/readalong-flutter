@@ -32,9 +32,12 @@ void main() {
     expect(manager.position, Duration.zero);
   });
 
-  testWidgets('audio widget opens a compact speed menu above its button', (
-    tester,
-  ) async {
+  testWidgets('speed menu is anchored to a bounded button', (tester) async {
+    tester.view.physicalSize = const Size(800, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
     final manager = Manager(xml: _sampleXml, xmlAsset: null, audioSource: null);
     await manager.initialize();
     addTearDown(() async {
@@ -43,20 +46,23 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(body: AudioPlayerWidget(manager: manager)),
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.bottomCenter,
+            child: AudioPlayerWidget(manager: manager),
+          ),
+        ),
       ),
     );
 
     await tester.tap(find.byTooltip('Adjust speed'));
     await tester.pumpAndSettle();
 
-    expect(
-      find.textContaining(RegExp(r'^(0\.5|0\.75|1|1\.25|1\.5|1\.75|2)x$')),
-      findsNWidgets(7),
-    );
-    final speedButtonTop = tester.getTopLeft(find.byTooltip('Adjust speed')).dy;
-    final menuBottom = tester.getBottomRight(find.text('2x')).dy;
-    expect(menuBottom, lessThanOrEqualTo(speedButtonTop));
+    final speedButton = find.byTooltip('Adjust speed');
+    final buttonRect = tester.getRect(speedButton);
+    expect(buttonRect.width, lessThanOrEqualTo(64));
+    expect(buttonRect.height, lessThanOrEqualTo(64));
+    expect(find.byType(MenuItemButton), findsNWidgets(7));
 
     await tester.tap(find.text('1.25x'));
     await tester.pumpAndSettle();

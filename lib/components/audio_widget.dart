@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:readalong/components/speed_dialog.dart';
 
 import '../manager.dart';
 
@@ -13,22 +14,7 @@ class AudioPlayerWidget extends StatelessWidget {
       children: [
         PlayButton(manager: manager),
         Expanded(child: _buildProgressBar()),
-        AnimatedBuilder(
-          animation: manager,
-          builder: (context, _) => Builder(
-            builder: (buttonContext) => IconButton(
-              tooltip: 'Adjust speed',
-              icon: Text(
-                '${manager.speed.toStringAsFixed(1)}x',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              onPressed: () => showSliderDialog(
-                context: buttonContext,
-                manager: manager,
-              ),
-            ),
-          ),
-        ),
+        SpeedDialog(manager: manager),
       ],
     );
   }
@@ -67,51 +53,6 @@ class AudioPlayerWidget extends StatelessWidget {
       ],
     );
   }
-}
-
-Future<void> showSliderDialog({
-  required BuildContext context,
-  required Manager manager,
-}) async {
-  const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
-  const itemHeight = 36.0;
-  const menuVerticalPadding = 16.0;
-
-  final button = context.findRenderObject()! as RenderBox;
-  final overlay = Overlay.of(context).context.findRenderObject()! as RenderBox;
-  final buttonTopLeft = button.localToGlobal(
-    Offset.zero,
-    ancestor: overlay,
-  );
-  final buttonBottomRight = button.localToGlobal(
-    button.size.bottomRight(Offset.zero),
-    ancestor: overlay,
-  );
-  final buttonRect = Rect.fromPoints(buttonTopLeft, buttonBottomRight);
-  final menuHeight = speeds.length * itemHeight + menuVerticalPadding;
-  final menuTop = (buttonRect.top - menuHeight).clamp(
-    0.0,
-    overlay.size.height,
-  );
-
-  final selectedSpeed = await showMenu<double>(
-    context: context,
-    position: RelativeRect.fromLTRB(
-      buttonRect.left,
-      menuTop,
-      overlay.size.width - buttonRect.right,
-      overlay.size.height - buttonRect.top,
-    ),
-    items: [
-      for (final speed in speeds)
-        PopupMenuItem<double>(
-          value: speed,
-          height: itemHeight,
-          child: Text('${_formatSpeed(speed)}x'),
-        ),
-    ],
-  );
-  if (selectedSpeed != null) await manager.setSpeed(selectedSpeed);
 }
 
 class PlayButton extends StatelessWidget {
@@ -158,10 +99,4 @@ class PlayButton extends StatelessWidget {
       },
     );
   }
-}
-
-String _formatSpeed(double speed) {
-  return speed == speed.roundToDouble()
-      ? speed.toStringAsFixed(0)
-      : speed.toString();
 }
