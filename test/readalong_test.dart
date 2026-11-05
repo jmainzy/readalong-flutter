@@ -19,6 +19,21 @@ const _sampleXml = '''
 </read-along>
 ''';
 
+const _translationXml = '''
+<read-along>
+  <text xml:lang="eng">
+    <body>
+      <div type="page" id="page-1">
+        <p>
+          <s id="sentence-1"><w id="word-1" time="0.25" dur="0.5">Hello</w></s>
+          <s id="sentence-2" class="translation">Hola</s>
+        </p>
+      </div>
+    </body>
+  </text>
+</read-along>
+''';
+
 void main() {
   test('Manager loads document and owns playback state', () async {
     final manager = Manager(xml: _sampleXml, xmlAsset: null, audioSource: null);
@@ -32,7 +47,9 @@ void main() {
     expect(manager.position, Duration.zero);
   });
 
-  testWidgets('speed menu is anchored to a bounded button', (tester) async {
+  testWidgets('speed menu shows a marked horizontal speed slider', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(800, 1000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -62,12 +79,56 @@ void main() {
     final buttonRect = tester.getRect(speedButton);
     expect(buttonRect.width, lessThanOrEqualTo(64));
     expect(buttonRect.height, lessThanOrEqualTo(64));
-    expect(find.byType(MenuItemButton), findsNWidgets(7));
-
-    await tester.tap(find.text('1.25x'));
+    final speedSlider = tester.widget<Slider>(find.byType(Slider).last);
+    expect(speedSlider.divisions, 6);
+    final sliderRect = tester.getRect(find.byType(Slider).last);
+    await tester.tapAt(
+      Offset(
+        sliderRect.left + 24 + (sliderRect.width - 48) * 5 / 6,
+        sliderRect.center.dy,
+      ),
+    );
     await tester.pumpAndSettle();
-    expect(manager.speed, 1.25);
-    expect(find.text('0.5x'), findsNothing);
+    expect(manager.speed, 1.5);
+  });
+
+  testWidgets('audio controls show title, full-width timeline, and actions', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final manager = Manager(xml: _sampleXml, xmlAsset: null, audioSource: null);
+    await manager.initialize();
+    addTearDown(manager.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 360,
+              child: AudioPlayerWidget(manager: manager, title: 'Speaker name'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Speaker name'), findsOneWidget);
+    expect(find.text('00:00'), findsOneWidget);
+    expect(find.text('--:--'), findsOneWidget);
+
+    final sliderRect = tester.getRect(find.byType(Slider));
+    expect(sliderRect.width, 360);
+
+    final playButtonRect = tester.getRect(find.byTooltip('Play'));
+    final speedButtonRect = tester.getRect(find.byTooltip('Adjust speed'));
+    expect(playButtonRect.center.dx, closeTo(sliderRect.center.dx, 1));
+    expect(speedButtonRect.right, closeTo(sliderRect.right - 8, 1));
+    expect(playButtonRect.top, greaterThan(sliderRect.bottom));
   });
 
   group('ReadAlongDocument.fromXml', () {
@@ -125,4 +186,47 @@ void main() {
     expect(find.textContaining('world'), findsOneWidget);
     expect(find.byIcon(Icons.play_arrow), findsNothing);
   });
+
+  testWidgets(
+    'uses distinct default and customizable translation text styles',
+    (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: SizedBox(height: 500, child: ReadAlong(xml: _translationXml)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      RichText findRichTextContaining(String text) => tester.widget<RichText>(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is RichText && widget.text.toPlainText().contains(text),
+        ),
+      );
+      final mainText = findRichTextContaining('Hello');
+      final translation = findRichTextContaining('Hola');
+
+      expect(mainText.text.style?.fontSize, 20);
+      expect(translation.text.style?.fontSize, 14);
+      expect(translation.text.style?.color, Colors.grey.shade600);
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: SizedBox(
+            height: 500,
+            child: ReadAlong(
+              xml: _translationXml,
+              textStyle: TextStyle(fontSize: 24),
+              translationTextStyle: TextStyle(fontSize: 12, color: Colors.blue),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(findRichTextContaining('Hello').text.style?.fontSize, 24);
+      expect(findRichTextContaining('Hola').text.style?.fontSize, 12);
+      expect(findRichTextContaining('Hola').text.style?.color, Colors.blue);
+    },
+  );
 }

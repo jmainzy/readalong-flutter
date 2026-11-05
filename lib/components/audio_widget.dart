@@ -4,18 +4,44 @@ import 'package:readalong/components/speed_dialog.dart';
 import '../manager.dart';
 
 class AudioPlayerWidget extends StatelessWidget {
-  const AudioPlayerWidget({super.key, required this.manager});
+  const AudioPlayerWidget({super.key, required this.manager, this.title});
 
   final Manager manager;
+  final String? title;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        PlayButton(manager: manager),
-        Expanded(child: _buildProgressBar()),
-        SpeedDialog(manager: manager),
-      ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (title != null && title!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                title!,
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+          _buildProgressSlider(),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: _buildTimestamps(context),
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              SizedBox(width: 60),
+              Expanded(
+                child: Center(child: PlayButton(manager: manager)),
+              ),
+              SizedBox(width: 60, child: SpeedDialog(manager: manager)),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -25,7 +51,7 @@ class AudioPlayerWidget extends StatelessWidget {
     return '$minutes:$seconds';
   }
 
-  Widget _buildProgressBar() {
+  Widget _buildProgressSlider() {
     final totalMilliseconds = manager.duration?.inMilliseconds ?? 0;
     final value = totalMilliseconds == 0
         ? 0.0
@@ -33,22 +59,28 @@ class AudioPlayerWidget extends StatelessWidget {
               .clamp(0, totalMilliseconds)
               .toDouble();
 
+    return Slider(
+      value: value,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      max: totalMilliseconds > 0 ? totalMilliseconds.toDouble() : 1,
+      onChanged: totalMilliseconds == 0 || manager.isAudioLoading
+          ? null
+          : manager.seekMilliseconds,
+    );
+  }
+
+  Widget _buildTimestamps(BuildContext context) {
+    final style = Theme.of(context).textTheme.labelSmall
+        ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant);
     return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(_formatDuration(manager.position)),
-        Expanded(
-          child: Slider(
-            value: value,
-            max: totalMilliseconds > 0 ? totalMilliseconds.toDouble() : 1,
-            onChanged: totalMilliseconds == 0 || manager.isAudioLoading
-                ? null
-                : manager.seekMilliseconds,
-          ),
-        ),
+        Text(_formatDuration(manager.position), style: style),
         Text(
           manager.duration == null
               ? '--:--'
               : _formatDuration(manager.duration!),
+          style: style,
         ),
       ],
     );

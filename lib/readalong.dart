@@ -28,8 +28,10 @@ class ReadAlong extends StatefulWidget {
     this.xml,
     this.xmlAsset,
     this.audioSource,
+    this.audioTitle,
     this.showTranslations = true,
     this.textStyle,
+    this.translationTextStyle,
     this.highlightColor,
   }) : assert((xml == null) != (xmlAsset == null));
 
@@ -45,11 +47,21 @@ class ReadAlong extends StatefulWidget {
   /// `AudioSource` supported by `just_audio`.
   final AudioSource? audioSource;
 
+  /// Optional title shown above the audio controls, such as a speaker name.
+  final String? audioTitle;
+
   /// Whether translation sentences in the XML should be displayed.
   final bool showTranslations;
 
-  /// Optional base style for the document text.
+  /// Optional style for the document text.
+  ///
+  /// By default, the document text uses a larger body style.
   final TextStyle? textStyle;
+
+  /// Optional style for translation text.
+  ///
+  /// By default, translations use smaller, lighter grey text.
+  final TextStyle? translationTextStyle;
 
   /// Optional background color for the word currently being spoken.
   final Color? highlightColor;
@@ -142,7 +154,10 @@ class _ReadAlongState extends State<ReadAlong> {
                     children: [
                       Padding(
                         padding: const EdgeInsets.only(bottom: 8),
-                        child: AudioPlayerWidget(manager: _manager),
+                        child: AudioPlayerWidget(
+                          manager: _manager,
+                          title: widget.audioTitle,
+                        ),
                       ),
                     ],
                   )
@@ -152,8 +167,6 @@ class _ReadAlongState extends State<ReadAlong> {
       },
     );
   }
-
-
 
   Widget _buildPage(
     BuildContext context,
@@ -199,7 +212,15 @@ class _ReadAlongState extends State<ReadAlong> {
                     _buildTextSpan(context, segment),
                 ],
               ),
-              style: widget.textStyle ?? Theme.of(context).textTheme.bodyLarge,
+              style: sentence.isTranslation
+                  ? widget.translationTextStyle ??
+                        (Theme.of(context).textTheme.bodyMedium ??
+                                const TextStyle(fontSize: 14))
+                            .copyWith(fontSize: 14, color: Colors.grey.shade600)
+                  : widget.textStyle ??
+                        (Theme.of(context).textTheme.bodyLarge ??
+                                const TextStyle(fontSize: 20))
+                            .copyWith(fontSize: 20),
             ),
         ],
       ),
@@ -230,10 +251,6 @@ class _ReadAlongState extends State<ReadAlong> {
             ? widget.highlightColor ??
                   Theme.of(context).colorScheme.primaryContainer
             : null,
-        decoration: aligned && widget.audioSource != null
-            ? TextDecoration.underline
-            : null,
-        decorationStyle: TextDecorationStyle.dotted,
       ),
     );
   }

@@ -43,6 +43,10 @@ class Manager extends ChangeNotifier {
   bool _isAudioLoading = false;
   bool _isPlaying = false;
   bool _isCompleted = false;
+  Duration? _wordPlaybackEnd;
+  String? _wordPlaybackHighlightId;
+  bool _isFinishingWordPlayback = false;
+  int _wordPlaybackGeneration = 0;
   double _speed = 1;
   final ValueNotifier<ButtonState> _buttonState = ValueNotifier(
     ButtonState.paused,
@@ -97,6 +101,7 @@ class Manager extends ChangeNotifier {
 
   Future<void> _loadDocument() async {
     final configuration = ++_documentConfiguration;
+    _clearWordPlaybackEnd();
     _document = null;
     _xmlError = null;
     _activeWordId = null;
@@ -117,6 +122,7 @@ class Manager extends ChangeNotifier {
 
   Future<void> _configureAudio() async {
     final configuration = ++_audioConfiguration;
+    _clearWordPlaybackEnd();
     final source = _audioSource;
     _audioError = null;
 
@@ -206,12 +212,56 @@ class Manager extends ChangeNotifier {
 
   void _updatePosition(Duration newPosition) {
     if (_disposed) return;
+    final wordEnd = _wordPlaybackEnd;
+    if (wordEnd != null && newPosition >= wordEnd) {
+      _position = wordEnd;
+      _updateActiveWord(wordEnd);
+      if (!_isFinishingWordPlayback) {
+        _isFinishingWordPlayback = true;
+        unawaited(_finishWordPlayback(wordEnd, _wordPlaybackGeneration));
+      }
+      notifyListeners();
+      return;
+    }
     _position = newPosition;
     _updateActiveWord(newPosition);
     notifyListeners();
   }
 
+  Future<void> _finishWordPlayback(Duration end, int generation) async {
+    try {
+      await _player.pause();
+      if (_disposed || generation != _wordPlaybackGeneration) return;
+      await _player.seek(end);
+      if (_disposed || generation != _wordPlaybackGeneration) return;
+      _position = end;
+      _updateActiveWord(end);
+      _wordPlaybackEnd = null;
+      _isFinishingWordPlayback = false;
+      notifyListeners();
+    } catch (error) {
+      if (generation == _wordPlaybackGeneration) {
+        _wordPlaybackEnd = null;
+        _isFinishingWordPlayback = false;
+        _handleAudioError(error);
+      }
+    }
+  }
+
+  void _clearWordPlaybackEnd() {
+    _wordPlaybackGeneration++;
+    _wordPlaybackEnd = null;
+    _wordPlaybackHighlightId = null;
+    _isFinishingWordPlayback = false;
+  }
+
   void _updateActiveWord(Duration at) {
+    final highlightedWordId = _wordPlaybackHighlightId;
+    if (highlightedWordId != null) {
+      _activeWordId = highlightedWordId;
+      return;
+    }
+
     _activeWordId = null;
     for (final word in _document?.words ?? const <ReadAlongWord>[]) {
       if (!word.isAligned) continue;
@@ -231,6 +281,8 @@ class Manager extends ChangeNotifier {
 
   Future<void> play() async {
     if (_audioSource == null || _isAudioLoading) return;
+    _clearWordPlaybackEnd();
+    _updateActiveWord(_position);
     try {
       if (_isCompleted || (_duration != null && _position >= _duration!)) {
         await _player.seek(Duration.zero);
@@ -242,6 +294,8 @@ class Manager extends ChangeNotifier {
   }
 
   Future<void> pause() async {
+    _clearWordPlaybackEnd();
+    _updateActiveWord(_position);
     try {
       await _player.pause();
     } catch (error) {
@@ -250,6 +304,7 @@ class Manager extends ChangeNotifier {
   }
 
   Future<void> stop() async {
+    _clearWordPlaybackEnd();
     try {
       await _player.stop();
       _position = Duration.zero;
@@ -261,6 +316,8 @@ class Manager extends ChangeNotifier {
   }
 
   Future<void> replay() async {
+    _clearWordPlaybackEnd();
+    _updateActiveWord(Duration.zero);
     try {
       await _player.seek(Duration.zero);
       await _player.play();
@@ -271,6 +328,8 @@ class Manager extends ChangeNotifier {
 
   Future<void> seek(Duration target) async {
     if (_isAudioLoading) return;
+    _clearWordPlaybackEnd();
+    _updateActiveWord(target);
     try {
       await _player.seek(target);
     } catch (error) {
@@ -284,11 +343,22 @@ class Manager extends ChangeNotifier {
 
   Future<void> playWord(ReadAlongWord word) async {
     if (!word.isAligned || _audioSource == null || _isAudioLoading) return;
+    _clearWordPlaybackEnd();
+    final generation = _wordPlaybackGeneration;
+    final end = word.start! + word.duration!;
+    _wordPlaybackHighlightId = word.id;
+    _activeWordId = word.id;
+    notifyListeners();
     try {
       await _player.seek(word.start);
+      if (_disposed || generation != _wordPlaybackGeneration) return;
+      _wordPlaybackEnd = end;
       await _player.play();
     } catch (error) {
-      _handleAudioError(error);
+      if (generation == _wordPlaybackGeneration) {
+        _clearWordPlaybackEnd();
+        _handleAudioError(error);
+      }
     }
   }
 

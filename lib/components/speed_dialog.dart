@@ -13,6 +13,15 @@ class _SpeedDialogState extends State<SpeedDialog> {
   static const speeds = [0.3, 0.5, 0.8, 1.0, 1.2, 1.5, 1.7];
   final FocusNode _buttonFocusNode = FocusNode(debugLabel: 'Speed Button');
 
+  int _speedIndex(double speed) {
+    return speeds.indexOf(
+      speeds.reduce(
+        (closest, option) =>
+            (option - speed).abs() < (closest - speed).abs() ? option : closest,
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _buttonFocusNode.dispose();
@@ -21,7 +30,6 @@ class _SpeedDialogState extends State<SpeedDialog> {
 
   @override
   Widget build(BuildContext context) {
-    double currentSpeed = widget.manager.speed;
     return AnimatedBuilder(
       animation: widget.manager,
       builder: (context, _) => SizedBox(
@@ -31,19 +39,29 @@ class _SpeedDialogState extends State<SpeedDialog> {
           childFocusNode: _buttonFocusNode,
           crossAxisUnconstrained: false,
           menuChildren: [
-            for (final speed in speeds)
-              MenuItemButton(
-                onPressed: () {
-                  widget.manager.setSpeed(speed);
-                  _buttonFocusNode.requestFocus();
-                },
-                child: Text(
-                  _formatSpeed(speed),
-                  style: speed == currentSpeed
-                      ? const TextStyle(fontWeight: FontWeight.w800)
-                      : const TextStyle(fontWeight: FontWeight.w500),
-                ),
+            SizedBox(
+              width: 280,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Audio speed',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                  Slider(
+                    min: 0,
+                    max: (speeds.length - 1).toDouble(),
+                    divisions: speeds.length - 1,
+                    value: _speedIndex(widget.manager.speed).toDouble(),
+                    label: '${_formatSpeed(widget.manager.speed)}x',
+                    onChanged: (index) {
+                      widget.manager.setSpeed(speeds[index.round()]);
+                    },
+                  ),
+                ],
               ),
+            ),
+            // ),
           ],
           builder: (_, MenuController controller, Widget? child) {
             return IconButton(
