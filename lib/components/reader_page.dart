@@ -14,12 +14,14 @@ class ReaderPage extends StatefulWidget {
   final String? imageUri;
   final Manager manager;
   final bool audioEnabled;
+  final Object? audioError;
 
   const ReaderPage({
     super.key,
     required this.page,
     required this.manager,
     this.audioEnabled = false,
+    this.audioError,
     this.translationTextStyle,
     this.textStyle,
     this.showTranslations = true,
@@ -86,8 +88,25 @@ class _ReaderPageState extends State<ReaderPage> {
           ),
           const SizedBox(height: 12),
         ],
-        for (final paragraph in page.paragraphs)
-          _buildParagraph(context, paragraph),
+        Expanded(
+          child: ListView(
+            padding: EdgeInsets.zero,
+            children: [
+              if (widget.audioError != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    'Unable to load or play audio: ${widget.audioError}',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+              for (final paragraph in page.paragraphs)
+                _buildParagraph(context, paragraph),
+            ],
+          ),
+        ),
       ],
     );
   }

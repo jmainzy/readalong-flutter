@@ -10,6 +10,7 @@ class AudioPlayerWidget extends StatelessWidget {
     this.title,
     this.onPreviousPage,
     this.onNextPage,
+    this.onReplay,
     this.canGoToPreviousPage = false,
     this.canGoToNextPage = false,
   });
@@ -18,6 +19,7 @@ class AudioPlayerWidget extends StatelessWidget {
   final String? title;
   final VoidCallback? onPreviousPage;
   final VoidCallback? onNextPage;
+  final VoidCallback? onReplay;
   final bool canGoToPreviousPage;
   final bool canGoToNextPage;
 
@@ -48,16 +50,30 @@ class AudioPlayerWidget extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 SizedBox(width: 60),
-                IconButton(
-                  tooltip: 'Previous page',
-                  onPressed: canGoToPreviousPage ? onPreviousPage : null,
-                  icon: const Icon(Icons.skip_previous),
+                Visibility(
+                  visible: canGoToPreviousPage,
+                  maintainSize: true,
+                  maintainAnimation: true,
+                  maintainState: true,
+                  child: IconButton(
+                    tooltip: 'Previous page',
+                    onPressed: canGoToPreviousPage ? onPreviousPage : null,
+                    icon: const Icon(Icons.skip_previous),
+                  ),
                 ),
-                Center(child: PlayButton(manager: manager)),
-                IconButton(
-                  tooltip: 'Next page',
-                  onPressed: canGoToNextPage ? onNextPage : null,
-                  icon: const Icon(Icons.skip_next),
+                Center(
+                  child: PlayButton(manager: manager, onReplay: onReplay),
+                ),
+                Visibility(
+                  visible: canGoToNextPage,
+                  maintainSize: true,
+                  maintainAnimation: true,
+                  maintainState: true,
+                  child: IconButton(
+                    tooltip: 'Next page',
+                    onPressed: canGoToNextPage ? onNextPage : null,
+                    icon: const Icon(Icons.skip_next),
+                  ),
                 ),
                 SizedBox(width: 60, child: SpeedDialog(manager: manager)),
               ],
@@ -111,8 +127,9 @@ class AudioPlayerWidget extends StatelessWidget {
 }
 
 class PlayButton extends StatelessWidget {
-  const PlayButton({super.key, required this.manager});
+  const PlayButton({super.key, required this.manager, this.onReplay});
   final Manager manager;
+  final VoidCallback? onReplay;
 
   @override
   Widget build(BuildContext context) {
@@ -134,7 +151,10 @@ class PlayButton extends StatelessWidget {
               tooltip: 'Replay',
               icon: const Icon(Icons.replay),
               iconSize: size,
-              onPressed: manager.replay,
+              onPressed: () {
+                onReplay?.call();
+                manager.replay();
+              },
             );
           case ButtonState.paused:
             return IconButton(

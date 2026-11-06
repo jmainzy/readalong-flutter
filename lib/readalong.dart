@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:readalong/components/reader_page.dart';
+import 'package:readalong/models.dart';
 
 import 'components/audio_widget.dart';
 import 'manager.dart';
@@ -78,8 +79,10 @@ class ReadAlong extends StatefulWidget {
 
 class _ReadAlongState extends State<ReadAlong> {
   late final Manager _manager;
-  final ScrollController _pageScrollController = ScrollController();
+  final PageController _pageController = PageController();
   int _currentPageIndex = 0;
+  int? _requestedPageIndex;
+  String? _lastFollowedWordId;
 
   @override
   void initState() {
@@ -90,6 +93,7 @@ class _ReadAlongState extends State<ReadAlong> {
       audioSource: widget.audioSource,
       imagesFolder: widget.imagesFolder,
     );
+    _manager.addListener(_followActiveWord);
     unawaited(_manager.initialize());
   }
 
@@ -100,7 +104,9 @@ class _ReadAlongState extends State<ReadAlong> {
         oldWidget.xmlAsset != widget.xmlAsset ||
         oldWidget.audioSource != widget.audioSource) {
       _currentPageIndex = 0;
-      if (_pageScrollController.hasClients) _pageScrollController.jumpTo(0);
+      _requestedPageIndex = null;
+      _lastFollowedWordId = null;
+      if (_pageController.hasClients) _pageController.jumpToPage(0);
       unawaited(
         _manager.updateSources(
           xml: widget.xml,
@@ -113,8 +119,9 @@ class _ReadAlongState extends State<ReadAlong> {
 
   @override
   void dispose() {
+    _manager.removeListener(_followActiveWord);
     _manager.dispose();
-    _pageScrollController.dispose();
+    _pageController.dispose();
     super.dispose();
   }
 
@@ -140,39 +147,40 @@ class _ReadAlongState extends State<ReadAlong> {
           _currentPageIndex = document.pages.length - 1;
         }
         final pageCount = document.pages.length;
-        final page = document.pages[_currentPageIndex];
 
         return Column(
           children: [
             Expanded(
-              child: ListView(
-                controller: _pageScrollController,
-                padding: const EdgeInsets.all(16),
-                children: [
-                  if (_manager.audioError != null)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: Text(
-                        'Unable to load or play audio: ${_manager.audioError}',
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
-                        ),
-                      ),
+              child: PageView.builder(
+                controller: _pageController,
+                itemCount: pageCount,
+                onPageChanged: (pageIndex) {
+                  setState(() {
+                    _currentPageIndex = pageIndex;
+                  });
+                },
+                itemBuilder: (context, pageIndex) {
+                  final page = document.pages[pageIndex];
+                  return Padding(
+                    key: PageStorageKey('readalong-page-${page.id}'),
+                    padding: const EdgeInsets.all(16),
+                    child: ReaderPage(
+                      key: ValueKey(page.id),
+                      page: page,
+                      manager: _manager,
+                      audioEnabled: widget.audioSource != null,
+                      audioError: _manager.audioError,
+                      translationTextStyle: widget.translationTextStyle,
+                      textStyle: widget.textStyle,
+                      showTranslations: widget.showTranslations,
+                      highlightColor: widget.highlightColor,
+                      imageUri:
+                          widget.imagesFolder != null && page.imageUrl != null
+                          ? _manager.getImageAsset(page.imageUrl!)
+                          : null,
                     ),
-                  ReaderPage(
-                    key: ValueKey(page.id),
-                    page: page,
-                    manager: _manager,
-                    audioEnabled: widget.audioSource != null,
-                    translationTextStyle: widget.translationTextStyle,
-                    textStyle: widget.textStyle,
-                    showTranslations: widget.showTranslations,
-                    highlightColor: widget.highlightColor,
-                    imageUri: widget.imagesFolder != null && page.imageUrl != null
-                        ? _manager.getImageAsset(page.imageUrl!)
-                        : null,
-                  ),
-                ],
+                  );
+                },
               ),
             ),
             widget.audioSource != null
@@ -187,6 +195,7 @@ class _ReadAlongState extends State<ReadAlong> {
                           canGoToNextPage: _currentPageIndex < pageCount - 1,
                           onPreviousPage: _goToPreviousPage,
                           onNextPage: _goToNextPage,
+                          onReplay: _goToFirstPage,
                         ),
                       ),
                     ],
@@ -198,20 +207,62 @@ class _ReadAlongState extends State<ReadAlong> {
     );
   }
 
+  void _followActiveWord() {
+    final activeWordId = _manager.activeWordId;
+    if (activeWordId == _lastFollowedWordId) return;
+    _lastFollowedWordId = activeWordId;
+    if (activeWordId == null) return;
+
+    final pages = _manager.document?.pages;
+    if (pages == null) return;
+    final pageIndex = pages.indexWhere(
+      (page) => page.paragraphs.any(
+        (paragraph) => paragraph.sentences.any(
+          (sentence) => sentence.segments.any(
+            (segment) => segment is ReadAlongWord && segment.id == activeWordId,
+          ),
+        ),
+      ),
+    );
+    if (pageIndex == -1 || pageIndex == _currentPageIndex) return;
+    _changePage(pageIndex);
+  }
+
   void _goToPreviousPage() {
     if (_currentPageIndex == 0) return;
-    setState(() {
-      _currentPageIndex--;
-    });
-    if (_pageScrollController.hasClients) _pageScrollController.jumpTo(0);
+    _changePage(_currentPageIndex - 1);
+  }
+
+  void _goToFirstPage() {
+    if (_currentPageIndex == 0) return;
+    _changePage(0);
   }
 
   void _goToNextPage() {
     final pageCount = _manager.document?.pages.length ?? 0;
     if (_currentPageIndex >= pageCount - 1) return;
-    setState(() {
-      _currentPageIndex++;
-    });
-    if (_pageScrollController.hasClients) _pageScrollController.jumpTo(0);
+    _changePage(_currentPageIndex + 1);
+  }
+
+  void _changePage(int pageIndex) {
+    if (!_pageController.hasClients) return;
+    if (pageIndex == _currentPageIndex ||
+        pageIndex == _requestedPageIndex) {
+      return;
+    }
+    _requestedPageIndex = pageIndex;
+    unawaited(_animateToPage(pageIndex));
+  }
+
+  Future<void> _animateToPage(int pageIndex) async {
+    try {
+      await _pageController.animateToPage(
+        pageIndex,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+    } finally {
+      if (_requestedPageIndex == pageIndex) _requestedPageIndex = null;
+    }
   }
 }

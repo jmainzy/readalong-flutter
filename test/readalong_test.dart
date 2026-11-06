@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
@@ -59,6 +60,20 @@ const _twoPageXml = '''
       <div type="page" id="page-2">
         <p><s id="sentence-2">Second page words</s></p>
         <graphic url="second.jpg" />
+      </div>
+    </body>
+  </text>
+</read-along>
+''';
+
+final _longPageXml =
+    '''
+<read-along>
+  <text xml:lang="eng">
+    <body>
+      <div type="page" id="long-page">
+        <graphic url="example01.jpg" />
+        ${List.generate(12, (index) => '<p><s id="sentence-$index">Paragraph $index with enough text to fill the page and continue scrolling.</s></p>').join()}
       </div>
     </body>
   </text>
@@ -223,6 +238,18 @@ void main() {
       expect(firstImageTop, lessThan(firstTextTop));
       expect(pageButton('Previous page').onPressed, isNull);
       expect(pageButton('Next page').onPressed, isNotNull);
+      expect(
+        tester
+            .widget<Visibility>(
+              find.ancestor(
+                of: find.byTooltip('Previous page'),
+                matching: find.byType(Visibility),
+              ),
+            )
+            .visible,
+        isFalse,
+      );
+      expect(find.byType(PageView), findsOneWidget);
 
       final nextButtonTop = tester.getTopLeft(find.byTooltip('Next page')).dy;
       await tester.tap(find.byTooltip('Next page'));
@@ -234,12 +261,89 @@ void main() {
       expect(tester.getTopLeft(find.byTooltip('Next page')).dy, nextButtonTop);
       expect(pageButton('Previous page').onPressed, isNotNull);
       expect(pageButton('Next page').onPressed, isNull);
+      expect(
+        tester
+            .widget<Visibility>(
+              find.ancestor(
+                of: find.byTooltip('Next page'),
+                matching: find.byType(Visibility),
+              ),
+            )
+            .visible,
+        isFalse,
+      );
 
       await tester.tap(find.byTooltip('Previous page'));
       await tester.pumpAndSettle();
       expect(find.text('First page words'), findsOneWidget);
+
+      await tester.drag(find.byType(PageView), const Offset(-600, 0));
+      await tester.pumpAndSettle();
+      expect(find.text('Second page words'), findsOneWidget);
     },
   );
+
+  testWidgets('page text scrolls while the page image stays fixed', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: 800,
+          child: ReadAlong(xml: _longPageXml, imagesFolder: 'assets/images'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final textScrollable = tester.state<ScrollableState>(
+      find.descendant(
+        of: find.byType(ListView),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    final imageTop = tester.getTopLeft(find.byType(Image)).dy;
+
+    await tester.drag(find.byType(ListView), const Offset(0, -180));
+    await tester.pumpAndSettle();
+
+    expect(tester.getTopLeft(find.byType(Image)).dy, imageTop);
+    expect(textScrollable.position.pixels, greaterThan(0));
+  });
+
+  testWidgets('replay invokes the first-page callback and restarts audio', (
+    tester,
+  ) async {
+    final manager = _ReplayManager();
+    addTearDown(manager.dispose);
+    var replayCallbackCalled = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 360,
+              child: AudioPlayerWidget(
+                manager: manager,
+                onReplay: () => replayCallbackCalled = true,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('Replay'));
+    await tester.pump();
+
+    expect(replayCallbackCalled, isTrue);
+    expect(manager.replayCalled, isTrue);
+  });
 
   group('ReadAlongDocument.fromXml', () {
     test('parses pages, metadata, and word timing', () {
@@ -339,4 +443,27 @@ void main() {
       expect(findRichTextContaining('Hola').text.style?.color, Colors.blue);
     },
   );
+}
+
+class _ReplayManager extends Manager {
+  _ReplayManager() : super(xml: _sampleXml, xmlAsset: null, audioSource: null);
+
+  final ValueNotifier<ButtonState> _completedState = ValueNotifier(
+    ButtonState.completed,
+  );
+  bool replayCalled = false;
+
+  @override
+  ValueListenable<ButtonState> get buttonState => _completedState;
+
+  @override
+  Future<void> replay() async {
+    replayCalled = true;
+  }
+
+  @override
+  void dispose() {
+    _completedState.dispose();
+    super.dispose();
+  }
 }
