@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:readalong/components/speed_dialog.dart';
 
@@ -25,61 +27,99 @@ class AudioPlayerWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (title != null && title!.isNotEmpty)
+    return Container(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildProgressSlider(),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                title!,
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
+              child: _buildTimestamps(context),
             ),
-          _buildProgressSlider(),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _buildTimestamps(context),
-          ),
-          SizedBox(
-            height: 48,
-            child: Row(
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                SizedBox(width: 60),
                 Visibility(
-                  visible: canGoToPreviousPage,
+                  visible: canGoToPreviousPage || canGoToNextPage,
                   maintainSize: true,
                   maintainAnimation: true,
                   maintainState: true,
-                  child: IconButton(
-                    tooltip: 'Previous page',
-                    onPressed: canGoToPreviousPage ? onPreviousPage : null,
-                    icon: const Icon(Icons.skip_previous),
+                  child: AnimatedBuilder(
+                    animation: manager,
+                    builder: (context, _) {
+                      final autoplay = manager.autoplay;
+                      return IconButton(
+                        tooltip: autoplay ? 'Autoplay On' : 'Autoplay Off',
+                        onPressed: manager.togglePagePlaybackMode,
+                        icon: Icon(Icons.rotate_right),
+                        color: autoplay
+                            ? Theme.of(context).colorScheme.primary
+                            : null,
+                      );
+                    },
                   ),
                 ),
-                Center(
-                  child: PlayButton(manager: manager, onReplay: onReplay),
-                ),
-                Visibility(
-                  visible: canGoToNextPage,
-                  maintainSize: true,
-                  maintainAnimation: true,
-                  maintainState: true,
-                  child: IconButton(
-                    tooltip: 'Next page',
-                    onPressed: canGoToNextPage ? onNextPage : null,
-                    icon: const Icon(Icons.skip_next),
+                Expanded(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Visibility(
+                        visible: canGoToPreviousPage,
+                        maintainSize: true,
+                        maintainAnimation: true,
+                        maintainState: true,
+                        child: IconButton(
+                          tooltip: 'Previous page',
+                          onPressed: canGoToPreviousPage
+                              ? onPreviousPage
+                              : null,
+                          icon: const Icon(Icons.skip_previous),
+                        ),
+                      ),
+                      PlayButton(manager: manager, onReplay: onReplay),
+
+                      Visibility(
+                        visible: canGoToNextPage,
+                        maintainSize: true,
+                        maintainAnimation: true,
+                        maintainState: true,
+                        child: IconButton(
+                          tooltip: 'Next page',
+                          onPressed: canGoToNextPage ? onNextPage : null,
+                          icon: const Icon(Icons.skip_next),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                SizedBox(width: 60, child: SpeedDialog(manager: manager)),
+                SizedBox(width: 48),
               ],
             ),
-          ),
-        ],
+
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                if (title != null && title!.isNotEmpty)
+                  Text(
+                    title!,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: Theme.of(context).textTheme.labelMedium?.color
+                          ?.withAlpha(120),
+                    ),
+                  )
+                else
+                  const SizedBox.shrink(),
+                SizedBox(width: 48, child: SpeedDialog(manager: manager)),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -94,7 +134,7 @@ class AudioPlayerWidget extends StatelessWidget {
     final totalMilliseconds = manager.duration?.inMilliseconds ?? 0;
     final value = totalMilliseconds == 0
         ? 0.0
-        : manager.position.inMilliseconds
+        : manager.displayPosition.inMilliseconds
               .clamp(0, totalMilliseconds)
               .toDouble();
 
@@ -102,9 +142,15 @@ class AudioPlayerWidget extends StatelessWidget {
       value: value,
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       max: totalMilliseconds > 0 ? totalMilliseconds.toDouble() : 1,
+      onChangeStart: totalMilliseconds == 0 || manager.isAudioLoading
+          ? null
+          : (_) => unawaited(manager.beginSeek()),
       onChanged: totalMilliseconds == 0 || manager.isAudioLoading
           ? null
-          : manager.seekMilliseconds,
+          : manager.updateSeekPreviewMilliseconds,
+      onChangeEnd: totalMilliseconds == 0 || manager.isAudioLoading
+          ? null
+          : manager.endSeek,
     );
   }
 
@@ -114,7 +160,7 @@ class AudioPlayerWidget extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(_formatDuration(manager.position), style: style),
+        Text(_formatDuration(manager.displayPosition), style: style),
         Text(
           manager.duration == null
               ? '--:--'
@@ -133,7 +179,7 @@ class PlayButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    double size = 32.0;
+    double size = 42.0;
     return ValueListenableBuilder<ButtonState>(
       valueListenable: manager.buttonState,
       builder: (context, value, _) {
@@ -159,7 +205,7 @@ class PlayButton extends StatelessWidget {
           case ButtonState.paused:
             return IconButton(
               tooltip: 'Play',
-              icon: const Icon(Icons.play_arrow),
+              icon: const Icon(Icons.play_circle_fill),
               iconSize: size,
               onPressed: manager.play,
             );

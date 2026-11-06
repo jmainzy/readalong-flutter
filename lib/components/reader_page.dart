@@ -86,11 +86,10 @@ class _ReaderPageState extends State<ReaderPage> {
               ),
             ),
           ),
-          const SizedBox(height: 12),
         ],
         Expanded(
           child: ListView(
-            padding: EdgeInsets.zero,
+            padding: EdgeInsets.all(16),
             children: [
               if (widget.audioError != null)
                 Padding(

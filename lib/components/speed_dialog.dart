@@ -32,55 +32,51 @@ class _SpeedDialogState extends State<SpeedDialog> {
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: widget.manager,
-      builder: (context, _) => SizedBox(
-        width: 60,
-        height: 48,
-        child: MenuAnchor(
-          childFocusNode: _buttonFocusNode,
-          crossAxisUnconstrained: false,
-          menuChildren: [
-            SizedBox(
-              width: 280,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Audio speed',
-                    style: Theme.of(context).textTheme.labelLarge,
-                  ),
-                  Slider(
-                    min: 0,
-                    max: (speeds.length - 1).toDouble(),
-                    divisions: speeds.length - 1,
-                    value: _speedIndex(widget.manager.speed).toDouble(),
-                    label: '${_formatSpeed(widget.manager.speed)}x',
-                    onChanged: (index) {
-                      widget.manager.setSpeed(speeds[index.round()]);
-                    },
-                  ),
-                ],
-              ),
+      builder: (context, _) => MenuAnchor(
+        childFocusNode: _buttonFocusNode,
+        crossAxisUnconstrained: false,
+        menuChildren: [
+          SizedBox(
+            width: 280,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Audio speed',
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+                Slider(
+                  min: 0,
+                  max: (speeds.length - 1).toDouble(),
+                  divisions: speeds.length - 1,
+                  value: _speedIndex(widget.manager.speed).toDouble(),
+                  label: '${_formatSpeed(widget.manager.speed)}x',
+                  onChanged: (index) {
+                    widget.manager.setSpeed(speeds[index.round()]);
+                  },
+                ),
+              ],
             ),
-            // ),
-          ],
-          builder: (_, MenuController controller, Widget? child) {
-            return IconButton(
-              tooltip: 'Adjust speed',
-              focusNode: _buttonFocusNode,
-              onPressed: () {
-                if (controller.isOpen) {
-                  controller.close();
-                } else {
-                  controller.open();
-                }
-              },
-              icon: Text(
-                '${_formatSpeed(widget.manager.speed)}x',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-            );
-          },
-        ),
+          ),
+          // ),
+        ],
+        builder: (_, MenuController controller, Widget? child) {
+          return IconButton(
+            tooltip: 'Adjust speed',
+            focusNode: _buttonFocusNode,
+            onPressed: () {
+              if (controller.isOpen) {
+                controller.close();
+              } else {
+                controller.open();
+              }
+            },
+            icon: Text(
+              '${_formatSpeed(widget.manager.speed)}x',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          );
+        },
       ),
     );
   }

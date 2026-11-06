@@ -161,44 +161,33 @@ class _ReadAlongState extends State<ReadAlong> {
                 },
                 itemBuilder: (context, pageIndex) {
                   final page = document.pages[pageIndex];
-                  return Padding(
-                    key: PageStorageKey('readalong-page-${page.id}'),
-                    padding: const EdgeInsets.all(16),
-                    child: ReaderPage(
-                      key: ValueKey(page.id),
-                      page: page,
-                      manager: _manager,
-                      audioEnabled: widget.audioSource != null,
-                      audioError: _manager.audioError,
-                      translationTextStyle: widget.translationTextStyle,
-                      textStyle: widget.textStyle,
-                      showTranslations: widget.showTranslations,
-                      highlightColor: widget.highlightColor,
-                      imageUri:
-                          widget.imagesFolder != null && page.imageUrl != null
-                          ? _manager.getImageAsset(page.imageUrl!)
-                          : null,
-                    ),
+                  return ReaderPage(
+                    key: ValueKey(page.id),
+                    page: page,
+                    manager: _manager,
+                    audioEnabled: widget.audioSource != null,
+                    audioError: _manager.audioError,
+                    translationTextStyle: widget.translationTextStyle,
+                    textStyle: widget.textStyle,
+                    showTranslations: widget.showTranslations,
+                    highlightColor: widget.highlightColor,
+                    imageUri:
+                        widget.imagesFolder != null && page.imageUrl != null
+                        ? _manager.getImageAsset(page.imageUrl!)
+                        : null,
                   );
                 },
               ),
             ),
             widget.audioSource != null
-                ? Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: AudioPlayerWidget(
-                          manager: _manager,
-                          title: widget.audioTitle,
-                          canGoToPreviousPage: _currentPageIndex > 0,
-                          canGoToNextPage: _currentPageIndex < pageCount - 1,
-                          onPreviousPage: _goToPreviousPage,
-                          onNextPage: _goToNextPage,
-                          onReplay: _goToFirstPage,
-                        ),
-                      ),
-                    ],
+                ? AudioPlayerWidget(
+                    manager: _manager,
+                    title: widget.audioTitle,
+                    canGoToPreviousPage: _currentPageIndex > 0,
+                    canGoToNextPage: _currentPageIndex < pageCount - 1,
+                    onPreviousPage: _goToPreviousPage,
+                    onNextPage: _goToNextPage,
+                    onReplay: _goToFirstPage,
                   )
                 : Container(),
           ],
@@ -246,8 +235,7 @@ class _ReadAlongState extends State<ReadAlong> {
 
   void _changePage(int pageIndex) {
     if (!_pageController.hasClients) return;
-    if (pageIndex == _currentPageIndex ||
-        pageIndex == _requestedPageIndex) {
+    if (pageIndex == _currentPageIndex || pageIndex == _requestedPageIndex) {
       return;
     }
     _requestedPageIndex = pageIndex;

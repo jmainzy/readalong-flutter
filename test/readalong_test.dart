@@ -93,6 +93,19 @@ void main() {
     expect(manager.position, Duration.zero);
   });
 
+  test('seek preview updates the highlighted word without committing position', () async {
+    final manager = Manager(xml: _sampleXml, xmlAsset: null, audioSource: null);
+    addTearDown(manager.dispose);
+    await manager.initialize();
+
+    await manager.beginSeek();
+    manager.updateSeekPreviewMilliseconds(900);
+
+    expect(manager.displayPosition, const Duration(milliseconds: 900));
+    expect(manager.position, Duration.zero);
+    expect(manager.activeWordId, 'word-2');
+  });
+
   testWidgets('speed menu shows a marked horizontal speed slider', (
     tester,
   ) async {
@@ -175,6 +188,36 @@ void main() {
     expect(playButtonRect.center.dx, closeTo(sliderRect.center.dx, 1));
     expect(speedButtonRect.right, closeTo(sliderRect.right, 1));
     expect(playButtonRect.top, greaterThan(sliderRect.bottom));
+  });
+
+  testWidgets('autoplay toggle switches between auto and pause-at-page modes', (
+    tester,
+  ) async {
+    final manager = Manager(xml: _sampleXml, xmlAsset: null, audioSource: null);
+    addTearDown(manager.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AudioPlayerWidget(manager: manager, canGoToNextPage: true),
+        ),
+      ),
+    );
+
+    expect(manager.autoplay, isTrue);
+    expect(find.byTooltip('Autoplay On'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Autoplay On'));
+    await tester.pump();
+
+    expect(manager.autoplay, isFalse);
+    expect(find.byTooltip('Autoplay Off'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Autoplay Off'));
+    await tester.pump();
+
+    expect(manager.autoplay, isTrue);
+    expect(find.byTooltip('Autoplay On'), findsOneWidget);
   });
 
   testWidgets('loads page image from the provided images folder', (

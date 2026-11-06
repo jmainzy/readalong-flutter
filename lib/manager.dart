@@ -40,14 +40,18 @@ class Manager extends ChangeNotifier {
   Object? _xmlError;
   Object? _audioError;
   Duration _position = Duration.zero;
+  Duration? _seekPreviewPosition;
   Duration? _duration;
   String? _activeWordId;
   bool _isAudioLoading = false;
   bool _isPlaying = false;
   bool _isCompleted = false;
+  bool _autoplay = false;
+  int? _pausedAtPageIndex;
   Duration? _wordPlaybackEnd;
   String? _wordPlaybackHighlightId;
   bool _isFinishingWordPlayback = false;
+  bool _isSeeking = false;
   int _wordPlaybackGeneration = 0;
   double _speed = 1;
   final ValueNotifier<ButtonState> _buttonState = ValueNotifier(
@@ -58,11 +62,13 @@ class Manager extends ChangeNotifier {
   Object? get xmlError => _xmlError;
   Object? get audioError => _audioError;
   Duration get position => _position;
+  Duration get displayPosition => _seekPreviewPosition ?? _position;
   Duration? get duration => _duration;
   String? get activeWordId => _activeWordId;
   bool get isAudioLoading => _isAudioLoading;
   bool get isPlaying => _isPlaying;
   bool get isCompleted => _isCompleted;
+  bool get autoplay => !_autoplay;
   double get speed => _speed;
   ValueListenable<ButtonState> get buttonState => _buttonState;
 
@@ -194,6 +200,7 @@ class Manager extends ChangeNotifier {
   }
 
   ButtonState _toReadAlongPlayerState(PlayerState state) {
+    if (_isSeeking) return ButtonState.paused;
     if (state.processingState == ProcessingState.loading ||
         state.processingState == ProcessingState.buffering) {
       return state.playing
@@ -213,7 +220,7 @@ class Manager extends ChangeNotifier {
   }
 
   void _updatePosition(Duration newPosition) {
-    if (_disposed) return;
+    if (_disposed || _isSeeking) return;
     final wordEnd = _wordPlaybackEnd;
     if (wordEnd != null && newPosition >= wordEnd) {
       _position = wordEnd;
@@ -225,8 +232,146 @@ class Manager extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    final previousPosition = _position;
+    if (_pauseAtPageEnd(previousPosition, newPosition)) {
+      notifyListeners();
+      return;
+    }
     _position = newPosition;
     _updateActiveWord(newPosition);
+    notifyListeners();
+  }
+
+  bool _pauseAtPageEnd(Duration previousPosition, Duration position) {
+    if (_pausedAtPageIndex != null) return true;
+    if (!_autoplay || !_isPlaying || _wordPlaybackEnd != null) {
+      return false;
+    }
+
+    final boundary = previousPosition == position
+        ? _pageBoundaryAt(position)
+        : _pageBoundaryCrossed(previousPosition, position);
+    if (boundary == null || position < boundary.end) return false;
+    if (_nextAlignedPage(boundary.pageIndex) == null) return false;
+
+    _pausedAtPageIndex = boundary.pageIndex;
+    _position = boundary.end;
+    _activeWordId = boundary.wordId;
+    unawaited(_finishPagePlayback(boundary.end, _wordPlaybackGeneration));
+    return true;
+  }
+
+  ({int pageIndex, Duration end, String wordId})? _pageBoundaryCrossed(
+    Duration previousPosition,
+    Duration position,
+  ) {
+    final pages = _document?.pages;
+    if (pages == null) return null;
+
+    for (final (pageIndex, page) in pages.indexed) {
+      final range = _pagePlaybackRange(pageIndex, page);
+      if (range != null &&
+          previousPosition < range.end &&
+          position >= range.end) {
+        return (
+          pageIndex: pageIndex,
+          end: range.end,
+          wordId: range.lastWord.id,
+        );
+      }
+    }
+    return null;
+  }
+
+  ({int pageIndex, Duration start, Duration end, ReadAlongWord lastWord})?
+  _pagePlaybackRange(int pageIndex, ReadAlongPage page) {
+    final words = page.paragraphs
+        .expand((paragraph) => paragraph.sentences)
+        .expand((sentence) => sentence.segments)
+        .whereType<ReadAlongWord>()
+        .where((word) => word.isAligned)
+        .toList();
+    if (words.isEmpty) return null;
+
+    final starts = words.map((word) => word.start!).toList()..sort();
+    final lastWord = words.reduce((latest, word) {
+      final wordEnd = word.start! + word.duration!;
+      final latestEnd = latest.start! + latest.duration!;
+      return wordEnd > latestEnd ? word : latest;
+    });
+    return (
+      pageIndex: pageIndex,
+      start: starts.first,
+      end: lastWord.start! + lastWord.duration!,
+      lastWord: lastWord,
+    );
+  }
+
+  ({int pageIndex, Duration end, String wordId})? _pageBoundaryAt(
+    Duration position,
+  ) {
+    final pages = _document?.pages;
+    if (pages == null) return null;
+
+    final pageRanges =
+        <
+          ({
+            int pageIndex,
+            Duration start,
+            Duration end,
+            ReadAlongWord lastWord,
+          })
+        >[];
+    for (final (pageIndex, page) in pages.indexed) {
+      final range = _pagePlaybackRange(pageIndex, page);
+      if (range != null) pageRanges.add(range);
+    }
+
+    if (pageRanges.isEmpty) return null;
+    var currentPage = pageRanges.first;
+    for (final range in pageRanges.skip(1)) {
+      if (range.start > position) break;
+      currentPage = range;
+    }
+    return (
+      pageIndex: currentPage.pageIndex,
+      end: currentPage.end,
+      wordId: currentPage.lastWord.id,
+    );
+  }
+
+  Future<void> _finishPagePlayback(Duration end, int generation) async {
+    try {
+      await _player.pause();
+      if (_disposed || generation != _wordPlaybackGeneration) return;
+      await _player.seek(end);
+      if (_disposed || generation != _wordPlaybackGeneration) return;
+      _position = end;
+      final pageIndex = _pausedAtPageIndex;
+      final pages = _document?.pages;
+      if (pageIndex != null && pages != null && pageIndex < pages.length) {
+        final lastWord = _pagePlaybackRange(
+          pageIndex,
+          pages[pageIndex],
+        )?.lastWord;
+        if (lastWord != null) _activeWordId = lastWord.id;
+      }
+      notifyListeners();
+    } catch (error) {
+      if (generation == _wordPlaybackGeneration) {
+        _pausedAtPageIndex = null;
+        _handleAudioError(error);
+      }
+    }
+  }
+
+  void togglePagePlaybackMode() {
+    _autoplay = !_autoplay;
+    if (!_autoplay) {
+      _pausedAtPageIndex = null;
+    } else {
+      _pauseAtPageEnd(_position, _position);
+    }
     notifyListeners();
   }
 
@@ -252,6 +397,7 @@ class Manager extends ChangeNotifier {
 
   void _clearWordPlaybackEnd() {
     _wordPlaybackGeneration++;
+    _pausedAtPageIndex = null;
     _wordPlaybackEnd = null;
     _wordPlaybackHighlightId = null;
     _isFinishingWordPlayback = false;
@@ -283,10 +429,21 @@ class Manager extends ChangeNotifier {
 
   Future<void> play() async {
     if (_audioSource == null || _isAudioLoading) return;
+    final pausedPageIndex = _pausedAtPageIndex;
+    _pausedAtPageIndex = null;
     _clearWordPlaybackEnd();
     _updateActiveWord(_position);
     try {
-      if (_isCompleted || (_duration != null && _position >= _duration!)) {
+      if (pausedPageIndex != null) {
+        final nextPage = _nextAlignedPage(pausedPageIndex);
+        if (nextPage != null) {
+          final nextPageStart = nextPage.start!;
+          await _player.seek(nextPageStart);
+          _position = nextPageStart;
+          _updateActiveWord(_position);
+        }
+      } else if (_isCompleted ||
+          (_duration != null && _position >= _duration!)) {
         await _player.seek(Duration.zero);
       }
       await _player.play();
@@ -318,6 +475,7 @@ class Manager extends ChangeNotifier {
   }
 
   Future<void> replay() async {
+    _pausedAtPageIndex = null;
     _clearWordPlaybackEnd();
     _updateActiveWord(Duration.zero);
     try {
@@ -328,8 +486,55 @@ class Manager extends ChangeNotifier {
     }
   }
 
+  Future<void> beginSeek() async {
+    if (_isSeeking) return;
+    _isSeeking = true;
+    _seekPreviewPosition = _position;
+    _clearWordPlaybackEnd();
+    _pausedAtPageIndex = null;
+    notifyListeners();
+    if (!_isPlaying) return;
+
+    try {
+      await _player.pause();
+    } catch (error) {
+      _isSeeking = false;
+      _seekPreviewPosition = null;
+      _handleAudioError(error);
+    }
+  }
+
+  void updateSeekPreviewMilliseconds(double milliseconds) {
+    if (!_isSeeking) return;
+    final target = Duration(milliseconds: milliseconds.round());
+    _seekPreviewPosition = target;
+    _updateActiveWord(target);
+    notifyListeners();
+  }
+
+  Future<void> endSeek(double milliseconds) async {
+    if (!_isSeeking) return;
+    final target = Duration(milliseconds: milliseconds.round());
+    _seekPreviewPosition = target;
+    _updateActiveWord(target);
+    try {
+      await _player.seek(target);
+      _position = target;
+      _isSeeking = false;
+      _seekPreviewPosition = null;
+      _updateActiveWord(target);
+      notifyListeners();
+    } catch (error) {
+      _isSeeking = false;
+      _seekPreviewPosition = null;
+      _updateActiveWord(_position);
+      _handleAudioError(error);
+    }
+  }
+
   Future<void> seek(Duration target) async {
     if (_isAudioLoading) return;
+    _pausedAtPageIndex = null;
     _clearWordPlaybackEnd();
     _updateActiveWord(target);
     try {
@@ -345,23 +550,57 @@ class Manager extends ChangeNotifier {
 
   Future<void> playWord(ReadAlongWord word) async {
     if (!word.isAligned || _audioSource == null || _isAudioLoading) return;
+    final continuePlayback = _isPlaying;
+    _pausedAtPageIndex = null;
     _clearWordPlaybackEnd();
     final generation = _wordPlaybackGeneration;
     final end = word.start! + word.duration!;
-    _wordPlaybackHighlightId = word.id;
-    _activeWordId = word.id;
+    if (continuePlayback) {
+      _position = word.start!;
+      _updateActiveWord(_position);
+    } else {
+      _wordPlaybackHighlightId = word.id;
+      _activeWordId = word.id;
+    }
     notifyListeners();
     try {
       await _player.seek(word.start);
       if (_disposed || generation != _wordPlaybackGeneration) return;
-      _wordPlaybackEnd = end;
-      await _player.play();
+      if (continuePlayback) {
+        _position = word.start!;
+        _updateActiveWord(_position);
+        notifyListeners();
+      } else {
+        _wordPlaybackEnd = end;
+        await _player.play();
+      }
     } catch (error) {
       if (generation == _wordPlaybackGeneration) {
         _clearWordPlaybackEnd();
         _handleAudioError(error);
       }
     }
+  }
+
+  ReadAlongWord? _nextAlignedPage(int pageIndex) {
+    final pages = _document?.pages;
+    if (pages == null) return null;
+    for (final page in pages.skip(pageIndex + 1)) {
+      final firstWord = page.paragraphs
+          .expand((paragraph) => paragraph.sentences)
+          .expand((sentence) => sentence.segments)
+          .whereType<ReadAlongWord>()
+          .where((word) => word.isAligned)
+          .fold<ReadAlongWord?>(
+            null,
+            (earliest, word) =>
+                earliest == null || word.start! < earliest.start!
+                ? word
+                : earliest,
+          );
+      if (firstWord != null) return firstWord;
+    }
+    return null;
   }
 
   String getImageAsset(String imageUrl) {
