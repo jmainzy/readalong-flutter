@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:readalong/manager.dart';
 
-class SpeedDialog extends StatefulWidget {
+class SpeedButton extends StatefulWidget {
   final Manager manager;
 
-  const SpeedDialog({super.key, required this.manager});
+  const SpeedButton({super.key, required this.manager});
   @override
-  State<SpeedDialog> createState() => _SpeedDialogState();
+  State<SpeedButton> createState() => _SpeedButtonState();
 }
 
-class _SpeedDialogState extends State<SpeedDialog> {
+class _SpeedButtonState extends State<SpeedButton> {
   static const speeds = [0.3, 0.5, 0.8, 1.0, 1.2, 1.5, 1.7];
   final FocusNode _buttonFocusNode = FocusNode(debugLabel: 'Speed Button');
 
@@ -64,6 +64,8 @@ class _SpeedDialogState extends State<SpeedDialog> {
           return IconButton(
             tooltip: 'Adjust speed',
             focusNode: _buttonFocusNode,
+            constraints: const BoxConstraints(minHeight: 48),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
             onPressed: () {
               if (controller.isOpen) {
                 controller.close();
@@ -73,6 +75,8 @@ class _SpeedDialogState extends State<SpeedDialog> {
             },
             icon: Text(
               '${_formatSpeed(widget.manager.speed)}x',
+              maxLines: 1,
+              softWrap: false,
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
           );

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:readalong/components/audio_widget.dart';
+import 'package:readalong/components/reader_page.dart';
 import 'package:readalong/models.dart';
 import 'package:readalong/readalong.dart';
 
@@ -73,7 +74,20 @@ final _longPageXml =
     <body>
       <div type="page" id="long-page">
         <graphic url="example01.jpg" />
-        ${List.generate(12, (index) => '<p><s id="sentence-$index">Paragraph $index with enough text to fill the page and continue scrolling.</s></p>').join()}
+        ${List.generate(30, (index) => '<p><s id="sentence-$index">Paragraph $index with enough text to fill the page and continue scrolling.</s></p>').join()}
+      </div>
+    </body>
+  </text>
+</read-along>
+''';
+
+final _alignedLongPageXml =
+    '''
+<read-along>
+  <text xml:lang="eng">
+    <body>
+      <div type="page" id="long-page">
+        ${List.generate(20, (index) => '<p><s id="sentence-$index"><w id="word-$index" time="${index * 2}" dur="1">Paragraph $index with enough text to fill the page and continue scrolling.</w></s></p>').join()}
       </div>
     </body>
   </text>
@@ -93,18 +107,25 @@ void main() {
     expect(manager.position, Duration.zero);
   });
 
-  test('seek preview updates the highlighted word without committing position', () async {
-    final manager = Manager(xml: _sampleXml, xmlAsset: null, audioSource: null);
-    addTearDown(manager.dispose);
-    await manager.initialize();
+  test(
+    'seek preview updates the highlighted word without committing position',
+    () async {
+      final manager = Manager(
+        xml: _sampleXml,
+        xmlAsset: null,
+        audioSource: null,
+      );
+      addTearDown(manager.dispose);
+      await manager.initialize();
 
-    await manager.beginSeek();
-    manager.updateSeekPreviewMilliseconds(900);
+      await manager.beginSeek();
+      manager.updateSeekPreviewMilliseconds(900);
 
-    expect(manager.displayPosition, const Duration(milliseconds: 900));
-    expect(manager.position, Duration.zero);
-    expect(manager.activeWordId, 'word-2');
-  });
+      expect(manager.displayPosition, const Duration(milliseconds: 900));
+      expect(manager.position, Duration.zero);
+      expect(manager.activeWordId, 'word-2');
+    },
+  );
 
   testWidgets('speed menu shows a marked horizontal speed slider', (
     tester,
@@ -177,6 +198,14 @@ void main() {
     );
 
     expect(find.text('Speaker name'), findsOneWidget);
+    final titleColor = tester
+        .widget<Text>(find.text('Speaker name'))
+        .style
+        ?.color;
+    expect(
+      tester.widget<Icon>(find.byIcon(Icons.info_outline)).color,
+      titleColor,
+    );
     expect(find.text('00:00'), findsOneWidget);
     expect(find.text('--:--'), findsOneWidget);
 
@@ -212,6 +241,7 @@ void main() {
 
     expect(manager.autoplay, isFalse);
     expect(find.byTooltip('Autoplay Off'), findsOneWidget);
+    expect(find.text('Autoplay off'), findsOneWidget);
 
     await tester.tap(find.byTooltip('Autoplay Off'));
     await tester.pump();
@@ -233,10 +263,17 @@ void main() {
     );
     await tester.pump();
 
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -500));
+    await tester.pumpAndSettle();
     final image = tester.widget<Image>(find.byType(Image));
     expect(
       (image.image as AssetImage).assetName,
       'assets/images/example01.jpg',
+    );
+    expect(image.fit, BoxFit.cover);
+    expect(
+      tester.getSize(find.byType(Image)).height,
+      greaterThanOrEqualTo(200),
     );
     expect(find.text('Story text'), findsOneWidget);
   });
@@ -273,6 +310,11 @@ void main() {
         ),
       );
 
+      await tester.drag(
+        find.byType(CustomScrollView).hitTestable().first,
+        const Offset(0, -700),
+      );
+      await tester.pumpAndSettle();
       expect(find.text('First page words'), findsOneWidget);
       expect(find.text('Second page words'), findsNothing);
       expect(find.byType(Image), findsOneWidget);
@@ -297,10 +339,19 @@ void main() {
       final nextButtonTop = tester.getTopLeft(find.byTooltip('Next page')).dy;
       await tester.tap(find.byTooltip('Next page'));
       await tester.pumpAndSettle();
+      await tester.drag(
+        find.byType(CustomScrollView).hitTestable().first,
+        const Offset(0, -700),
+      );
+      await tester.pumpAndSettle();
 
       expect(find.text('First page words'), findsNothing);
-      expect(find.text('Second page words'), findsOneWidget);
       expect(find.byType(Image), findsOneWidget);
+      expect(
+        (tester.widget<Image>(find.byType(Image)).image as AssetImage)
+            .assetName,
+        'assets/images/second.jpg',
+      );
       expect(tester.getTopLeft(find.byTooltip('Next page')).dy, nextButtonTop);
       expect(pageButton('Previous page').onPressed, isNotNull);
       expect(pageButton('Next page').onPressed, isNull);
@@ -318,15 +369,24 @@ void main() {
 
       await tester.tap(find.byTooltip('Previous page'));
       await tester.pumpAndSettle();
+      await tester.drag(
+        find.byType(CustomScrollView).hitTestable().first,
+        const Offset(0, -700),
+      );
+      await tester.pumpAndSettle();
       expect(find.text('First page words'), findsOneWidget);
 
       await tester.drag(find.byType(PageView), const Offset(-600, 0));
       await tester.pumpAndSettle();
-      expect(find.text('Second page words'), findsOneWidget);
+      expect(
+        (tester.widget<Image>(find.byType(Image)).image as AssetImage)
+            .assetName,
+        'assets/images/second.jpg',
+      );
     },
   );
 
-  testWidgets('page text scrolls while the page image stays fixed', (
+  testWidgets('page image collapses as text scrolls and stays at 200 minimum', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(800, 1000);
@@ -343,20 +403,77 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final textScrollable = tester.state<ScrollableState>(
-      find.descendant(
-        of: find.byType(ListView),
-        matching: find.byType(Scrollable),
-      ),
-    );
-    final imageTop = tester.getTopLeft(find.byType(Image)).dy;
+    final scrollView = find.byType(CustomScrollView);
+    final image = find.byType(Image);
+    final initialImageHeight = tester.getSize(image).height;
+    expect(initialImageHeight, greaterThan(200));
 
-    await tester.drag(find.byType(ListView), const Offset(0, -180));
+    await tester.drag(scrollView, const Offset(0, -300));
     await tester.pumpAndSettle();
 
-    expect(tester.getTopLeft(find.byType(Image)).dy, imageTop);
-    expect(textScrollable.position.pixels, greaterThan(0));
+    final collapsedImageHeight = tester.getSize(image).height;
+    expect(collapsedImageHeight, lessThan(initialImageHeight));
+    expect(collapsedImageHeight, greaterThanOrEqualTo(200));
+
+    await tester.drag(scrollView, const Offset(0, -600));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(image).height, 200);
   });
+
+  testWidgets(
+    'active sentence scrolls near the top during progress scrubbing',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final manager = Manager(
+        xml: _alignedLongPageXml,
+        xmlAsset: null,
+        audioSource: null,
+      );
+      await manager.initialize();
+      addTearDown(manager.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SizedBox(
+            height: 700,
+            child: ReaderPage(
+              page: manager.document!.pages.single,
+              manager: manager,
+              imageUri: 'missing-image.jpg',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await manager.beginSeek();
+      manager.updateSeekPreviewMilliseconds(10500);
+      await tester.pumpAndSettle();
+
+      final scrollState = tester.state<ScrollableState>(
+        find.descendant(
+          of: find.byType(CustomScrollView),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      final viewportTop = tester.getTopLeft(find.byType(CustomScrollView)).dy;
+      final sentenceTop = tester
+          .getTopLeft(
+            find.text(
+              'Paragraph 5 with enough text to fill the page and continue scrolling.',
+            ),
+          )
+          .dy;
+      expect(manager.activeWordId, 'word-5');
+      expect(scrollState.position.pixels, greaterThan(0));
+      expect(tester.getSize(find.byType(Image)).height, closeTo(200, 2));
+      expect(sentenceTop, closeTo(viewportTop + 216, 2));
+    },
+  );
 
   testWidgets('replay invokes the first-page callback and restarts audio', (
     tester,

@@ -67,6 +67,7 @@ class Manager extends ChangeNotifier {
   String? get activeWordId => _activeWordId;
   bool get isAudioLoading => _isAudioLoading;
   bool get isPlaying => _isPlaying;
+  bool get isSeeking => _isSeeking;
   bool get isCompleted => _isCompleted;
   bool get autoplay => !_autoplay;
   double get speed => _speed;

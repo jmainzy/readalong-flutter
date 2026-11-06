@@ -27,15 +27,21 @@ class AudioPlayerWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final titleStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
+      color: Theme.of(context).textTheme.labelMedium?.color?.withAlpha(120),
+    );
     return Container(
       color: Theme.of(context).colorScheme.surfaceContainerLow,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildProgressSlider(),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _buildProgressSlider(),
+            ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: _buildTimestamps(context),
@@ -55,7 +61,17 @@ class AudioPlayerWidget extends StatelessWidget {
                       final autoplay = manager.autoplay;
                       return IconButton(
                         tooltip: autoplay ? 'Autoplay On' : 'Autoplay Off',
-                        onPressed: manager.togglePagePlaybackMode,
+                        onPressed: () {
+                          manager.togglePagePlaybackMode();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Autoplay ${manager.autoplay ? 'on' : 'off'}',
+                              ),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        },
                         icon: Icon(Icons.rotate_right),
                         color: autoplay
                             ? Theme.of(context).colorScheme.primary
@@ -78,7 +94,7 @@ class AudioPlayerWidget extends StatelessWidget {
                           onPressed: canGoToPreviousPage
                               ? onPreviousPage
                               : null,
-                          icon: const Icon(Icons.skip_previous),
+                          icon: const Icon(Icons.chevron_left),
                         ),
                       ),
                       PlayButton(manager: manager, onReplay: onReplay),
@@ -91,7 +107,7 @@ class AudioPlayerWidget extends StatelessWidget {
                         child: IconButton(
                           tooltip: 'Next page',
                           onPressed: canGoToNextPage ? onNextPage : null,
-                          icon: const Icon(Icons.skip_next),
+                          icon: const Icon(Icons.chevron_right_sharp),
                         ),
                       ),
                     ],
@@ -105,17 +121,22 @@ class AudioPlayerWidget extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 if (title != null && title!.isNotEmpty)
-                  Text(
-                    title!,
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: Theme.of(context).textTheme.labelMedium?.color
-                          ?.withAlpha(120),
-                    ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(width: 14),
+                      Icon(
+                        Icons.info_outline,
+                        color: titleStyle?.color,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(title!, style: titleStyle),
+                    ],
                   )
                 else
                   const SizedBox.shrink(),
-                SizedBox(width: 48, child: SpeedDialog(manager: manager)),
+                SizedBox(width: 48, child: SpeedButton(manager: manager)),
               ],
             ),
           ],
