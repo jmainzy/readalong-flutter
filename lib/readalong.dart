@@ -30,6 +30,8 @@ class ReadAlong extends StatefulWidget {
     this.imagesFolder,
     this.audioSource,
     this.audioTitle,
+    this.onAutoplayChanged,
+    this.onSpeedChanged,
     this.showTranslations = true,
     this.textStyle,
     this.translationTextStyle,
@@ -56,6 +58,13 @@ class ReadAlong extends StatefulWidget {
 
   /// Optional title shown above the audio controls, such as a speaker name.
   final String? audioTitle;
+
+  /// Called when the user changes whether playback continues automatically
+  /// between pages.
+  final ValueChanged<bool>? onAutoplayChanged;
+
+  /// Called when the user changes the playback speed.
+  final ValueChanged<double>? onSpeedChanged;
 
   /// Whether translation sentences in the XML should be displayed.
   final bool showTranslations;
@@ -183,6 +192,8 @@ class _ReadAlongState extends State<ReadAlong> {
                 ? AudioPlayerWidget(
                     manager: _manager,
                     title: widget.audioTitle,
+                    onAutoplayChanged: widget.onAutoplayChanged,
+                    onSpeedChanged: widget.onSpeedChanged,
                     canGoToPreviousPage: _currentPageIndex > 0,
                     canGoToNextPage: _currentPageIndex < pageCount - 1,
                     onPreviousPage: _goToPreviousPage,

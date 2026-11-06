@@ -10,6 +10,8 @@ class AudioPlayerWidget extends StatelessWidget {
     super.key,
     required this.manager,
     this.title,
+    this.onAutoplayChanged,
+    this.onSpeedChanged,
     this.onPreviousPage,
     this.onNextPage,
     this.onReplay,
@@ -19,6 +21,8 @@ class AudioPlayerWidget extends StatelessWidget {
 
   final Manager manager;
   final String? title;
+  final ValueChanged<bool>? onAutoplayChanged;
+  final ValueChanged<double>? onSpeedChanged;
   final VoidCallback? onPreviousPage;
   final VoidCallback? onNextPage;
   final VoidCallback? onReplay;
@@ -63,6 +67,7 @@ class AudioPlayerWidget extends StatelessWidget {
                         tooltip: autoplay ? 'Autoplay On' : 'Autoplay Off',
                         onPressed: () {
                           manager.togglePagePlaybackMode();
+                          onAutoplayChanged?.call(manager.autoplay);
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
                               content: Text(
@@ -136,7 +141,13 @@ class AudioPlayerWidget extends StatelessWidget {
                   )
                 else
                   const SizedBox.shrink(),
-                SizedBox(width: 48, child: SpeedButton(manager: manager)),
+                SizedBox(
+                  width: 48,
+                  child: SpeedButton(
+                    manager: manager,
+                    onSpeedChanged: onSpeedChanged,
+                  ),
+                ),
               ],
             ),
           ],

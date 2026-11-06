@@ -140,13 +140,17 @@ void main() {
     addTearDown(() async {
       manager.dispose();
     });
+    final changedSpeeds = <double>[];
 
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: Align(
             alignment: Alignment.bottomCenter,
-            child: AudioPlayerWidget(manager: manager),
+            child: AudioPlayerWidget(
+              manager: manager,
+              onSpeedChanged: changedSpeeds.add,
+            ),
           ),
         ),
       ),
@@ -170,6 +174,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(manager.speed, 1.5);
+    expect(changedSpeeds, contains(1.5));
   });
 
   testWidgets('audio controls show title, full-width timeline, and actions', (
@@ -224,11 +229,16 @@ void main() {
   ) async {
     final manager = Manager(xml: _sampleXml, xmlAsset: null, audioSource: null);
     addTearDown(manager.dispose);
+    final autoplayChanges = <bool>[];
 
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: AudioPlayerWidget(manager: manager, canGoToNextPage: true),
+          body: AudioPlayerWidget(
+            manager: manager,
+            canGoToNextPage: true,
+            onAutoplayChanged: autoplayChanges.add,
+          ),
         ),
       ),
     );
@@ -240,6 +250,7 @@ void main() {
     await tester.pump();
 
     expect(manager.autoplay, isFalse);
+    expect(autoplayChanges, [false]);
     expect(find.byTooltip('Autoplay Off'), findsOneWidget);
     expect(find.text('Autoplay off'), findsOneWidget);
 
@@ -247,6 +258,7 @@ void main() {
     await tester.pump();
 
     expect(manager.autoplay, isTrue);
+    expect(autoplayChanges, [false, true]);
     expect(find.byTooltip('Autoplay On'), findsOneWidget);
   });
 
