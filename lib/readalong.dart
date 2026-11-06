@@ -1,12 +1,11 @@
 import 'dart:async';
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:readalong/components/reader_page.dart';
 
 import 'components/audio_widget.dart';
 import 'manager.dart';
-import 'models.dart';
 
 export 'manager.dart';
 
@@ -27,6 +26,7 @@ class ReadAlong extends StatefulWidget {
     super.key,
     this.xml,
     this.xmlAsset,
+    this.imagesFolder,
     this.audioSource,
     this.audioTitle,
     this.showTranslations = true,
@@ -40,6 +40,12 @@ class ReadAlong extends StatefulWidget {
 
   /// Flutter asset path for a `.readalong` document.
   final String? xmlAsset;
+
+  /// Asset folder containing the page images referenced by the document.
+  ///
+  /// For example, if a page contains `<graphic url="page1.jpg" />`, provide
+  /// `assets/images` to load it from `assets/images/page1.jpg`.
+  final String? imagesFolder;
 
   /// Audio to play alongside the aligned text.
   ///
@@ -72,7 +78,8 @@ class ReadAlong extends StatefulWidget {
 
 class _ReadAlongState extends State<ReadAlong> {
   late final Manager _manager;
-  final Map<String, TapGestureRecognizer> _wordRecognizers = {};
+  final ScrollController _pageScrollController = ScrollController();
+  int _currentPageIndex = 0;
 
   @override
   void initState() {
@@ -81,6 +88,7 @@ class _ReadAlongState extends State<ReadAlong> {
       xml: widget.xml,
       xmlAsset: widget.xmlAsset,
       audioSource: widget.audioSource,
+      imagesFolder: widget.imagesFolder,
     );
     unawaited(_manager.initialize());
   }
@@ -91,6 +99,8 @@ class _ReadAlongState extends State<ReadAlong> {
     if (oldWidget.xml != widget.xml ||
         oldWidget.xmlAsset != widget.xmlAsset ||
         oldWidget.audioSource != widget.audioSource) {
+      _currentPageIndex = 0;
+      if (_pageScrollController.hasClients) _pageScrollController.jumpTo(0);
       unawaited(
         _manager.updateSources(
           xml: widget.xml,
@@ -104,9 +114,7 @@ class _ReadAlongState extends State<ReadAlong> {
   @override
   void dispose() {
     _manager.dispose();
-    for (final recognizer in _wordRecognizers.values) {
-      recognizer.dispose();
-    }
+    _pageScrollController.dispose();
     super.dispose();
   }
 
@@ -128,10 +136,17 @@ class _ReadAlongState extends State<ReadAlong> {
           return const Center(child: CircularProgressIndicator());
         }
 
+        if (_currentPageIndex >= document.pages.length) {
+          _currentPageIndex = document.pages.length - 1;
+        }
+        final pageCount = document.pages.length;
+        final page = document.pages[_currentPageIndex];
+
         return Column(
           children: [
             Expanded(
               child: ListView(
+                controller: _pageScrollController,
                 padding: const EdgeInsets.all(16),
                 children: [
                   if (_manager.audioError != null)
@@ -144,8 +159,19 @@ class _ReadAlongState extends State<ReadAlong> {
                         ),
                       ),
                     ),
-                  for (final (pageIndex, page) in document.pages.indexed)
-                    _buildPage(context, page, pageIndex, document.pages.length),
+                  ReaderPage(
+                    key: ValueKey(page.id),
+                    page: page,
+                    manager: _manager,
+                    audioEnabled: widget.audioSource != null,
+                    translationTextStyle: widget.translationTextStyle,
+                    textStyle: widget.textStyle,
+                    showTranslations: widget.showTranslations,
+                    highlightColor: widget.highlightColor,
+                    imageUri: widget.imagesFolder != null && page.imageUrl != null
+                        ? _manager.getImageAsset(page.imageUrl!)
+                        : null,
+                  ),
                 ],
               ),
             ),
@@ -157,6 +183,10 @@ class _ReadAlongState extends State<ReadAlong> {
                         child: AudioPlayerWidget(
                           manager: _manager,
                           title: widget.audioTitle,
+                          canGoToPreviousPage: _currentPageIndex > 0,
+                          canGoToNextPage: _currentPageIndex < pageCount - 1,
+                          onPreviousPage: _goToPreviousPage,
+                          onNextPage: _goToNextPage,
                         ),
                       ),
                     ],
@@ -168,90 +198,20 @@ class _ReadAlongState extends State<ReadAlong> {
     );
   }
 
-  Widget _buildPage(
-    BuildContext context,
-    ReadAlongPage page,
-    int pageIndex,
-    int pageCount,
-  ) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: pageIndex == pageCount - 1 ? 0 : 28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (pageCount > 1)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Text(
-                'Page ${pageIndex + 1} of $pageCount',
-                style: Theme.of(context).textTheme.labelMedium,
-              ),
-            ),
-          for (final paragraph in page.paragraphs)
-            _buildParagraph(context, paragraph),
-        ],
-      ),
-    );
+  void _goToPreviousPage() {
+    if (_currentPageIndex == 0) return;
+    setState(() {
+      _currentPageIndex--;
+    });
+    if (_pageScrollController.hasClients) _pageScrollController.jumpTo(0);
   }
 
-  Widget _buildParagraph(BuildContext context, ReadAlongParagraph paragraph) {
-    final sentences = paragraph.sentences
-        .where((sentence) => widget.showTranslations || !sentence.isTranslation)
-        .toList();
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final sentence in sentences)
-            Text.rich(
-              TextSpan(
-                children: [
-                  for (final segment in sentence.segments)
-                    _buildTextSpan(context, segment),
-                ],
-              ),
-              style: sentence.isTranslation
-                  ? widget.translationTextStyle ??
-                        (Theme.of(context).textTheme.bodyMedium ??
-                                const TextStyle(fontSize: 14))
-                            .copyWith(fontSize: 14, color: Colors.grey.shade600)
-                  : widget.textStyle ??
-                        (Theme.of(context).textTheme.bodyLarge ??
-                                const TextStyle(fontSize: 20))
-                            .copyWith(fontSize: 20),
-            ),
-        ],
-      ),
-    );
-  }
-
-  TextSpan _buildTextSpan(BuildContext context, ReadAlongSegment segment) {
-    if (segment is! ReadAlongWord) {
-      return TextSpan(text: segment.text);
-    }
-
-    final isActive = segment.id == _manager.activeWordId;
-    final aligned = segment.isAligned;
-    final recognizer = aligned && widget.audioSource != null
-        ? _wordRecognizers.putIfAbsent(
-            segment.id,
-            () =>
-                TapGestureRecognizer()
-                  ..onTap = () => unawaited(_manager.playWordById(segment.id)),
-          )
-        : null;
-
-    return TextSpan(
-      text: segment.text,
-      recognizer: recognizer,
-      style: TextStyle(
-        backgroundColor: isActive
-            ? widget.highlightColor ??
-                  Theme.of(context).colorScheme.primaryContainer
-            : null,
-      ),
-    );
+  void _goToNextPage() {
+    final pageCount = _manager.document?.pages.length ?? 0;
+    if (_currentPageIndex >= pageCount - 1) return;
+    setState(() {
+      _currentPageIndex++;
+    });
+    if (_pageScrollController.hasClients) _pageScrollController.jumpTo(0);
   }
 }

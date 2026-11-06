@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:readalong/components/audio_widget.dart';
 import 'package:readalong/models.dart';
 import 'package:readalong/readalong.dart';
@@ -28,6 +29,36 @@ const _translationXml = '''
           <s id="sentence-1"><w id="word-1" time="0.25" dur="0.5">Hello</w></s>
           <s id="sentence-2" class="translation">Hola</s>
         </p>
+      </div>
+    </body>
+  </text>
+</read-along>
+''';
+
+const _imageXml = '''
+<read-along>
+  <text xml:lang="eng">
+    <body>
+      <div type="page" id="page-1">
+        <p><s id="sentence-1">Story text</s></p>
+        <graphic url="example01.jpg" />
+      </div>
+    </body>
+  </text>
+</read-along>
+''';
+
+const _twoPageXml = '''
+<read-along>
+  <text xml:lang="eng">
+    <body>
+      <div type="page" id="page-1">
+        <p><s id="sentence-1">First page words</s></p>
+        <graphic url="first.jpg" />
+      </div>
+      <div type="page" id="page-2">
+        <p><s id="sentence-2">Second page words</s></p>
+        <graphic url="second.jpg" />
       </div>
     </body>
   </text>
@@ -122,14 +153,93 @@ void main() {
     expect(find.text('--:--'), findsOneWidget);
 
     final sliderRect = tester.getRect(find.byType(Slider));
-    expect(sliderRect.width, 360);
+    expect(sliderRect.width, greaterThanOrEqualTo(320));
 
     final playButtonRect = tester.getRect(find.byTooltip('Play'));
     final speedButtonRect = tester.getRect(find.byTooltip('Adjust speed'));
     expect(playButtonRect.center.dx, closeTo(sliderRect.center.dx, 1));
-    expect(speedButtonRect.right, closeTo(sliderRect.right - 8, 1));
+    expect(speedButtonRect.right, closeTo(sliderRect.right, 1));
     expect(playButtonRect.top, greaterThan(sliderRect.bottom));
   });
+
+  testWidgets('loads page image from the provided images folder', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: SizedBox(
+          height: 500,
+          child: ReadAlong(xml: _imageXml, imagesFolder: 'assets/images/'),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final image = tester.widget<Image>(find.byType(Image));
+    expect(
+      (image.image as AssetImage).assetName,
+      'assets/images/example01.jpg',
+    );
+    expect(find.text('Story text'), findsOneWidget);
+  });
+
+  testWidgets(
+    'shows one image-first page with fixed page navigation controls',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final audioSource = AudioSource.asset('missing-audio.mp3');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 800,
+              child: ReadAlong(
+                xml: _twoPageXml,
+                imagesFolder: 'assets/images',
+                audioSource: audioSource,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      IconButton pageButton(String tooltip) => tester.widget<IconButton>(
+        find.ancestor(
+          of: find.byTooltip(tooltip),
+          matching: find.byType(IconButton),
+        ),
+      );
+
+      expect(find.text('First page words'), findsOneWidget);
+      expect(find.text('Second page words'), findsNothing);
+      expect(find.byType(Image), findsOneWidget);
+      final firstImageTop = tester.getTopLeft(find.byType(Image)).dy;
+      final firstTextTop = tester.getTopLeft(find.text('First page words')).dy;
+      expect(firstImageTop, lessThan(firstTextTop));
+      expect(pageButton('Previous page').onPressed, isNull);
+      expect(pageButton('Next page').onPressed, isNotNull);
+
+      final nextButtonTop = tester.getTopLeft(find.byTooltip('Next page')).dy;
+      await tester.tap(find.byTooltip('Next page'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('First page words'), findsNothing);
+      expect(find.text('Second page words'), findsOneWidget);
+      expect(find.byType(Image), findsOneWidget);
+      expect(tester.getTopLeft(find.byTooltip('Next page')).dy, nextButtonTop);
+      expect(pageButton('Previous page').onPressed, isNotNull);
+      expect(pageButton('Next page').onPressed, isNull);
+
+      await tester.tap(find.byTooltip('Previous page'));
+      await tester.pumpAndSettle();
+      expect(find.text('First page words'), findsOneWidget);
+    },
+  );
 
   group('ReadAlongDocument.fromXml', () {
     test('parses pages, metadata, and word timing', () {

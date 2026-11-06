@@ -4,10 +4,22 @@ import 'package:readalong/components/speed_dialog.dart';
 import '../manager.dart';
 
 class AudioPlayerWidget extends StatelessWidget {
-  const AudioPlayerWidget({super.key, required this.manager, this.title});
+  const AudioPlayerWidget({
+    super.key,
+    required this.manager,
+    this.title,
+    this.onPreviousPage,
+    this.onNextPage,
+    this.canGoToPreviousPage = false,
+    this.canGoToNextPage = false,
+  });
 
   final Manager manager;
   final String? title;
+  final VoidCallback? onPreviousPage;
+  final VoidCallback? onNextPage;
+  final bool canGoToPreviousPage;
+  final bool canGoToNextPage;
 
   @override
   Widget build(BuildContext context) {
@@ -30,15 +42,26 @@ class AudioPlayerWidget extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: _buildTimestamps(context),
           ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              SizedBox(width: 60),
-              Expanded(
-                child: Center(child: PlayButton(manager: manager)),
-              ),
-              SizedBox(width: 60, child: SpeedDialog(manager: manager)),
-            ],
+          SizedBox(
+            height: 48,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                SizedBox(width: 60),
+                IconButton(
+                  tooltip: 'Previous page',
+                  onPressed: canGoToPreviousPage ? onPreviousPage : null,
+                  icon: const Icon(Icons.skip_previous),
+                ),
+                Center(child: PlayButton(manager: manager)),
+                IconButton(
+                  tooltip: 'Next page',
+                  onPressed: canGoToNextPage ? onNextPage : null,
+                  icon: const Icon(Icons.skip_next),
+                ),
+                SizedBox(width: 60, child: SpeedDialog(manager: manager)),
+              ],
+            ),
           ),
         ],
       ),

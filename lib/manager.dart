@@ -17,6 +17,7 @@ class Manager extends ChangeNotifier {
     required AudioSource? audioSource,
     ReadalongParser? parser,
     AudioPlayer? audioPlayer,
+    this.imagesFolder,
   }) : assert((xml == null) != (xmlAsset == null)),
        _xml = xml,
        _xmlAsset = xmlAsset,
@@ -31,6 +32,7 @@ class Manager extends ChangeNotifier {
   final ReadalongParser _parser;
   final bool _ownsAudioPlayer;
   final AudioPlayer _player;
+  final String? imagesFolder;
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<PlayerState>? _playerStateSubscription;
 
@@ -360,6 +362,14 @@ class Manager extends ChangeNotifier {
         _handleAudioError(error);
       }
     }
+  }
+
+  String getImageAsset(String imageUrl) {
+    final folder = imagesFolder?.trim();
+    final imagePath = imageUrl.replaceFirst(RegExp(r'^(?:\./|/)+'), '');
+    if (folder == null || folder.isEmpty) return imagePath;
+
+    return '${folder.replaceFirst(RegExp(r'/+$'), '')}/$imagePath';
   }
 
   Future<void> playWordById(String id) async {
