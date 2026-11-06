@@ -1,46 +1,146 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:readalong/components/speed_dialog.dart';
 
 import '../manager.dart';
 
 class AudioPlayerWidget extends StatelessWidget {
-  const AudioPlayerWidget({super.key, required this.manager, this.title});
+  const AudioPlayerWidget({
+    super.key,
+    required this.manager,
+    this.title,
+    this.onPreviousPage,
+    this.onNextPage,
+    this.onReplay,
+    this.canGoToPreviousPage = false,
+    this.canGoToNextPage = false,
+  });
 
   final Manager manager;
   final String? title;
+  final VoidCallback? onPreviousPage;
+  final VoidCallback? onNextPage;
+  final VoidCallback? onReplay;
+  final bool canGoToPreviousPage;
+  final bool canGoToNextPage;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (title != null && title!.isNotEmpty)
+    final titleStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
+      color: Theme.of(context).textTheme.labelMedium?.color?.withAlpha(120),
+    );
+    return Container(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                title!,
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
+              child: _buildProgressSlider(),
             ),
-          _buildProgressSlider(),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _buildTimestamps(context),
-          ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              SizedBox(width: 60),
-              Expanded(
-                child: Center(child: PlayButton(manager: manager)),
-              ),
-              SizedBox(width: 60, child: SpeedDialog(manager: manager)),
-            ],
-          ),
-        ],
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _buildTimestamps(context),
+            ),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Visibility(
+                  visible: canGoToPreviousPage || canGoToNextPage,
+                  maintainSize: true,
+                  maintainAnimation: true,
+                  maintainState: true,
+                  child: AnimatedBuilder(
+                    animation: manager,
+                    builder: (context, _) {
+                      final autoplay = manager.autoplay;
+                      return IconButton(
+                        tooltip: autoplay ? 'Autoplay On' : 'Autoplay Off',
+                        onPressed: () {
+                          manager.togglePagePlaybackMode();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Autoplay ${manager.autoplay ? 'on' : 'off'}',
+                              ),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        },
+                        icon: Icon(Icons.rotate_right),
+                        color: autoplay
+                            ? Theme.of(context).colorScheme.primary
+                            : null,
+                      );
+                    },
+                  ),
+                ),
+                Expanded(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Visibility(
+                        visible: canGoToPreviousPage,
+                        maintainSize: true,
+                        maintainAnimation: true,
+                        maintainState: true,
+                        child: IconButton(
+                          tooltip: 'Previous page',
+                          onPressed: canGoToPreviousPage
+                              ? onPreviousPage
+                              : null,
+                          icon: const Icon(Icons.chevron_left),
+                        ),
+                      ),
+                      PlayButton(manager: manager, onReplay: onReplay),
+
+                      Visibility(
+                        visible: canGoToNextPage,
+                        maintainSize: true,
+                        maintainAnimation: true,
+                        maintainState: true,
+                        child: IconButton(
+                          tooltip: 'Next page',
+                          onPressed: canGoToNextPage ? onNextPage : null,
+                          icon: const Icon(Icons.chevron_right_sharp),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(width: 48),
+              ],
+            ),
+
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                if (title != null && title!.isNotEmpty)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(width: 14),
+                      Icon(
+                        Icons.info_outline,
+                        color: titleStyle?.color,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(title!, style: titleStyle),
+                    ],
+                  )
+                else
+                  const SizedBox.shrink(),
+                SizedBox(width: 48, child: SpeedButton(manager: manager)),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -55,7 +155,7 @@ class AudioPlayerWidget extends StatelessWidget {
     final totalMilliseconds = manager.duration?.inMilliseconds ?? 0;
     final value = totalMilliseconds == 0
         ? 0.0
-        : manager.position.inMilliseconds
+        : manager.displayPosition.inMilliseconds
               .clamp(0, totalMilliseconds)
               .toDouble();
 
@@ -63,9 +163,15 @@ class AudioPlayerWidget extends StatelessWidget {
       value: value,
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       max: totalMilliseconds > 0 ? totalMilliseconds.toDouble() : 1,
+      onChangeStart: totalMilliseconds == 0 || manager.isAudioLoading
+          ? null
+          : (_) => unawaited(manager.beginSeek()),
       onChanged: totalMilliseconds == 0 || manager.isAudioLoading
           ? null
-          : manager.seekMilliseconds,
+          : manager.updateSeekPreviewMilliseconds,
+      onChangeEnd: totalMilliseconds == 0 || manager.isAudioLoading
+          ? null
+          : manager.endSeek,
     );
   }
 
@@ -75,7 +181,7 @@ class AudioPlayerWidget extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(_formatDuration(manager.position), style: style),
+        Text(_formatDuration(manager.displayPosition), style: style),
         Text(
           manager.duration == null
               ? '--:--'
@@ -88,12 +194,13 @@ class AudioPlayerWidget extends StatelessWidget {
 }
 
 class PlayButton extends StatelessWidget {
-  const PlayButton({super.key, required this.manager});
+  const PlayButton({super.key, required this.manager, this.onReplay});
   final Manager manager;
+  final VoidCallback? onReplay;
 
   @override
   Widget build(BuildContext context) {
-    double size = 32.0;
+    double size = 42.0;
     return ValueListenableBuilder<ButtonState>(
       valueListenable: manager.buttonState,
       builder: (context, value, _) {
@@ -111,12 +218,15 @@ class PlayButton extends StatelessWidget {
               tooltip: 'Replay',
               icon: const Icon(Icons.replay),
               iconSize: size,
-              onPressed: manager.replay,
+              onPressed: () {
+                onReplay?.call();
+                manager.replay();
+              },
             );
           case ButtonState.paused:
             return IconButton(
               tooltip: 'Play',
-              icon: const Icon(Icons.play_arrow),
+              icon: const Icon(Icons.play_circle_fill),
               iconSize: size,
               onPressed: manager.play,
             );
