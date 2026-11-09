@@ -399,7 +399,7 @@ void main() {
     },
   );
 
-  testWidgets('page image collapses as text scrolls and stays at 200 minimum', (
+  testWidgets('page image is capped at half the viewport and collapses', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(800, 1000);
@@ -420,6 +420,7 @@ void main() {
     final image = find.byType(Image);
     final initialImageHeight = tester.getSize(image).height;
     expect(initialImageHeight, greaterThan(200));
+    expect(initialImageHeight, lessThanOrEqualTo(500));
 
     await tester.drag(scrollView, const Offset(0, -300));
     await tester.pumpAndSettle();
@@ -431,6 +432,27 @@ void main() {
     await tester.drag(scrollView, const Offset(0, -600));
     await tester.pumpAndSettle();
     expect(tester.getSize(image).height, 200);
+  });
+
+  testWidgets('page image fits within half of a short viewport', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(size: Size(200, 300)),
+          child: const ReadAlong(xml: _imageXml, imagesFolder: 'assets/images'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.getSize(find.byType(Image)).height, lessThanOrEqualTo(150));
   });
 
   testWidgets('image and text use two columns in compact landscape', (
@@ -462,6 +484,7 @@ void main() {
 
     final imageRect = tester.getRect(find.byType(Image));
     final textRect = tester.getRect(find.text('Story text'));
+    expect(imageRect.height, lessThanOrEqualTo(250));
     expect(imageRect.right, lessThanOrEqualTo(textRect.left));
     expect(tester.getSize(find.byType(CustomScrollView)).width, lessThan(700));
 

@@ -218,13 +218,23 @@ class _ReaderPageState extends State<ReaderPage> {
           child: LayoutBuilder(
             builder: (context, constraints) {
               final width = constraints.maxWidth;
+              final viewportHeight = MediaQuery.sizeOf(context).height;
               final isCompactLandscape =
                   widget.imageUri != null &&
                   MediaQuery.orientationOf(context) == Orientation.landscape &&
-                  constraints.maxHeight < 600;
+                  viewportHeight < 600;
+              final availableHeight = constraints.maxHeight < viewportHeight
+                  ? constraints.maxHeight
+                  : viewportHeight;
+              final maxImageHeight = availableHeight * 0.5;
+              final minImageHeight = maxImageHeight.clamp(0.0, 200.0);
               final imageHeight = width.isFinite
                   ? width / _imageAspectRatio
                   : 200.0;
+              final headerHeight = imageHeight.clamp(
+                minImageHeight,
+                maxImageHeight,
+              );
               final textView = CustomScrollView(
                 key: _textViewportKey,
                 controller: _textScrollController,
@@ -235,7 +245,8 @@ class _ReaderPageState extends State<ReaderPage> {
                       delegate: _CollapsingImageHeaderDelegate(
                         imageUri: widget.imageUri!,
                         imageBoxKey: _imageHeaderBoxKey,
-                        maxHeight: imageHeight < 200 ? 200 : imageHeight,
+                        minHeight: minImageHeight,
+                        maxHeight: headerHeight,
                         errorMessage:
                             'Unable to load page image: ${page.imageUrl}',
                         errorColor: Theme.of(context).colorScheme.error,
@@ -279,13 +290,15 @@ class _ReaderPageState extends State<ReaderPage> {
                 children: [
                   SizedBox(
                     width: width.isFinite ? width * 0.4 : 320,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: widget.onBackgroundTap,
-                      child: _buildLandscapeImage(
-                        context,
-                        width.isFinite ? width * 0.4 : 320,
-                        constraints.maxHeight,
+                    child: Center(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: widget.onBackgroundTap,
+                        child: _buildLandscapeImage(
+                          context,
+                          width.isFinite ? width * 0.4 : 320,
+                          maxImageHeight,
+                        ),
                       ),
                     ),
                   ),
@@ -315,18 +328,22 @@ class _ReaderPageState extends State<ReaderPage> {
     double width,
     double height,
   ) {
-    return Image.asset(
-      widget.imageUri!,
+    return SizedBox(
       width: width,
       height: height,
-      fit: BoxFit.contain,
-      errorBuilder: (context, error, stackTrace) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Text(
-            'Unable to load page image: ${page.imageUrl}',
-            style: TextStyle(color: Theme.of(context).colorScheme.error),
-            textAlign: TextAlign.center,
+      child: Image.asset(
+        widget.imageUri!,
+        width: width,
+        height: height,
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) => Center(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Text(
+              'Unable to load page image: ${page.imageUrl}',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+              textAlign: TextAlign.center,
+            ),
           ),
         ),
       ),
@@ -426,6 +443,7 @@ class _CollapsingImageHeaderDelegate extends SliverPersistentHeaderDelegate {
   const _CollapsingImageHeaderDelegate({
     required this.imageUri,
     required this.imageBoxKey,
+    required this.minHeight,
     required this.maxHeight,
     required this.errorMessage,
     required this.errorColor,
@@ -434,13 +452,14 @@ class _CollapsingImageHeaderDelegate extends SliverPersistentHeaderDelegate {
 
   final String imageUri;
   final GlobalKey imageBoxKey;
+  final double minHeight;
   final double maxHeight;
   final String errorMessage;
   final Color errorColor;
   final VoidCallback? onTap;
 
   @override
-  double get minExtent => 200;
+  double get minExtent => minHeight;
 
   @override
   double get maxExtent => maxHeight;
@@ -478,6 +497,7 @@ class _CollapsingImageHeaderDelegate extends SliverPersistentHeaderDelegate {
   bool shouldRebuild(covariant _CollapsingImageHeaderDelegate oldDelegate) {
     return imageUri != oldDelegate.imageUri ||
         imageBoxKey != oldDelegate.imageBoxKey ||
+        minHeight != oldDelegate.minHeight ||
         maxHeight != oldDelegate.maxHeight ||
         errorMessage != oldDelegate.errorMessage ||
         errorColor != oldDelegate.errorColor ||
