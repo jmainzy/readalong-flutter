@@ -1,25 +1,39 @@
-# readalong
+# Readalong Flutter component
 
-A Flutter library for displaying [ReadAlong Studio](https://github.com/ReadAlongs/Studio) `.readalong` XML with word-level audio alignment.
+A Flutter library for displaying a [ReadAlong Studio](https://github.com/ReadAlongs/Studio) `.readalong` document with word-level audio alignment.
+
+This is just a widget, you'll need to import it into a full Flutter app yourself.
+
+![example](readalong_screenshot.png)
 
 ## Features
 
 - Parse ReadAlong XML into pages, paragraphs, sentences, aligned words, and metadata.
-- Display the document as a Flutter widget.
 - Play an audio source, seek by tapping aligned words, and highlight the word at the current playback position.
 - Load XML directly or from a Flutter asset.
-- Optionally hide translation sentences marked with `class="translation"`.
 
-## Getting started
+## Install
 
-Add `readalong` to your Flutter project's dependencies, then import:
+Add `readalong` to your Flutter project's dependencies `pubspec.yaml`, by referencing this repo:
 
-```dart
-import 'package:just_audio/just_audio.dart';
-import 'package:readalong/readalong.dart';
+```
+readalong:
+  git:
+    url: https://github.com/jmainzy/readalong-flutter.git
 ```
 
-Provide the XML content (or an asset path) and an audio source:
+Alternatively, clone the repo and reference the location in your pubspec:
+
+```
+readalong:
+  path: ../readalong
+```
+
+## Usage
+
+First, [make a Readalong](https://readalong-studio.mothertongues.org/#/), and then download it as "Offline HTML".
+
+Open the html bundle and find the file that ends in `.readalong` and the audio.  Put those into the assets directory in your Flutter app, and reference them in the component:
 
 ```dart
 ReadAlong(
@@ -28,13 +42,9 @@ ReadAlong(
 )
 ```
 
-Declare both files in the consuming app's `pubspec.yaml`. You can also load the XML yourself and pass it as `xml`:
+ You can also load the XML yourself and pass it as `xml`:
 
 ```dart
-import 'package:just_audio/just_audio.dart';
-import 'package:flutter/services.dart';
-import 'package:readalong/readalong.dart';
-
 final xml = await rootBundle.loadString('assets/story.readalong');
 
 ReadAlong(
@@ -43,7 +53,41 @@ ReadAlong(
 )
 ```
 
-`audioSource` is optional; without it, the widget displays the document without playback controls or interactive words. `just_audio` sources such as `AudioSource.uri(...)` can be used for remote audio.
+## Full API
+
+| Option                 | Type                               | Default | Description                                                                                                                                                                                            |
+| ---------------------- | ---------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `key`                  | `Key?`                             | —       | Standard Flutter widget key.                                                                                                                                                                           |
+| `xml`                  | `String?`                          | `null`  | ReadAlong XML content supplied directly. Provide exactly one of `xml` or `xmlAsset`.                                                                                                                   |
+| `xmlAsset`             | `String?`                          | `null`  | Asset path to a `.readalong` XML file. Provide exactly one of `xml` or `xmlAsset`.                                                                                                                     |
+| `imagesFolder`         | `String?`                          | `null`  | Asset folder for page images referenced by the XML. For example, `assets/images` resolves `page1.jpg` to `assets/images/page1.jpg`.                                                                    |
+| `audioSource`          | `AudioSource?`                     | `null`  | Optional `just_audio` source. When omitted, playback controls and interactive word playback are disabled.                                                                                              |
+| `audioTitle`           | `String?`                          | `null`  | Optional title, such as the reader or performer, shown with the audio controls.                                                                                                                        |
+| `onAutoplayChanged`    | `ValueChanged<bool>?`              | `null`  | Called when the user changes autoplay between pages.                                                                                                                                                   |
+| `onSpeedChanged`       | `ValueChanged<double>?`            | `null`  | Called when the user changes playback speed; receives the speed multiplier.                                                                                                                            |
+| `onReaderSurfaceTap`   | `VoidCallback?`                    | `null`  | Called when the reader's image or blank text area is tapped.                                                                                                                                           |
+| `onPositionChanged`    | `ValueChanged<ReadAlongPosition>?` | `null`  | Receives reading-position updates and a final snapshot immediately before disposal. The snapshot contains page ID/index, text scroll offset, active word ID, and audio position when audio is enabled. |
+| `showTranslations`     | `bool`                             | `true`  | Whether to show translation sentences marked with `class="translation"`.                                                                                                                               |
+| `textStyle`            | `TextStyle?`                       | `null`  | Optional style for the main document text. Uses the theme's larger body style by default.                                                                                                              |
+| `translationTextStyle` | `TextStyle?`                       | `null`  | Optional style for translations. Uses smaller, lighter grey text by default.                                                                                                                           |
+| `highlightColor`       | `Color?`                           | `null`  | Background color for the word currently being spoken. Defaults to the theme's primary container color.                                                                                                 |
+### Fullscreen
+
+On Android and iOS, the reader hides the system bars while the device is in
+landscape and restores the normal edge-to-edge system UI when returning to
+portrait or when the reader is removed.
+
+Example:
+
+```dart
+ReadAlong(
+  xmlAsset: 'assets/story.readalong',
+  audioSource: AudioSource.asset('assets/story.mp3'),
+  onAutoplayChanged: (enabled) => saveAutoplaySetting(enabled),
+  onSpeedChanged: (speed) => savePlaybackSpeed(speed),
+)
+```
+
 
 ## Parsing XML without the widget
 

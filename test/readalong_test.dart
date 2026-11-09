@@ -1,10 +1,11 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:readalong/components/audio_widget.dart';
 import 'package:readalong/components/reader_page.dart';
-import 'package:readalong/models.dart';
+import 'package:readalong/models/readalong_document.dart';
 import 'package:readalong/readalong.dart';
 
 const _sampleXml = '''
@@ -432,6 +433,91 @@ void main() {
     expect(tester.getSize(image).height, 200);
   });
 
+  testWidgets('image and text use two columns in compact landscape', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1000, 500);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final manager = Manager(xml: _imageXml, xmlAsset: null, audioSource: null);
+    await manager.initialize();
+    addTearDown(manager.dispose);
+    var backgroundTapCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox.expand(
+          child: ReaderPage(
+            page: manager.document!.pages.single,
+            manager: manager,
+            imageUri: 'missing-image.jpg',
+            onBackgroundTap: () => backgroundTapCount++,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final imageRect = tester.getRect(find.byType(Image));
+    final textRect = tester.getRect(find.text('Story text'));
+    expect(imageRect.right, lessThanOrEqualTo(textRect.left));
+    expect(tester.getSize(find.byType(CustomScrollView)).width, lessThan(700));
+
+    await tester.tapAt(textRect.center);
+    await tester.pump();
+    expect(backgroundTapCount, 0);
+
+    await tester.tapAt(imageRect.center);
+    await tester.pump();
+    final textViewportRect = tester.getRect(find.byType(CustomScrollView));
+    await tester.tapAt(
+      Offset(textViewportRect.center.dx, textViewportRect.bottom - 12),
+    );
+    await tester.pump();
+    expect(backgroundTapCount, 2);
+  });
+
+  testWidgets('portrait image and blank text area trigger background tap', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final manager = Manager(xml: _imageXml, xmlAsset: null, audioSource: null);
+    await manager.initialize();
+    addTearDown(manager.dispose);
+    var backgroundTapCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox.expand(
+          child: ReaderPage(
+            page: manager.document!.pages.single,
+            manager: manager,
+            imageUri: 'missing-image.jpg',
+            onBackgroundTap: () => backgroundTapCount++,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tapAt(tester.getRect(find.byType(Image)).center);
+    await tester.pump();
+    expect(backgroundTapCount, 1);
+
+    final textViewport = tester.getRect(find.byType(CustomScrollView));
+    await tester.tapAt(
+      Offset(textViewport.center.dx, textViewport.bottom - 12),
+    );
+    await tester.pump();
+    expect(backgroundTapCount, 2);
+  });
+
   testWidgets(
     'active sentence scrolls near the top during progress scrubbing',
     (tester) async {
@@ -571,6 +657,124 @@ void main() {
     expect(find.textContaining('Hello'), findsOneWidget);
     expect(find.textContaining('world'), findsOneWidget);
     expect(find.byIcon(Icons.play_arrow), findsNothing);
+  });
+
+  testWidgets(
+    'reports text bookmark position and sends a final dispose value',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final positions = <ReadAlongPosition>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SizedBox(
+            height: 600,
+            child: ReadAlong(
+              xml: _longPageXml,
+              onPositionChanged: positions.add,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(positions, isNotEmpty);
+      expect(positions.last.pageIndex, 0);
+      expect(positions.last.audioPosition, isNull);
+
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -300));
+      await tester.pumpAndSettle();
+      expect(positions.last.textScrollOffset, greaterThan(0));
+
+      final lastPositionBeforeDispose = positions.length;
+      await tester.pumpWidget(const SizedBox.shrink());
+      expect(positions, hasLength(lastPositionBeforeDispose + 1));
+      expect(positions.last.textScrollOffset, greaterThan(0));
+    },
+  );
+
+  testWidgets('reader hides system UI in landscape and restores it afterward', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+
+    final systemUiCalls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          systemUiCalls.add(call);
+          return null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+
+    tester.view.physicalSize = const Size(1000, 500);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const MaterialApp(home: ReadAlong(xml: _sampleXml)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      systemUiCalls,
+      contains(
+        isA<MethodCall>()
+            .having(
+              (call) => call.method,
+              'method',
+              'SystemChrome.setEnabledSystemUIMode',
+            )
+            .having(
+              (call) => call.arguments,
+              'mode',
+              'SystemUiMode.immersiveSticky',
+            ),
+      ),
+    );
+
+    tester.view.physicalSize = const Size(500, 1000);
+    await tester.pumpAndSettle();
+
+    expect(
+      systemUiCalls,
+      contains(
+        isA<MethodCall>()
+            .having(
+              (call) => call.method,
+              'method',
+              'SystemChrome.setEnabledSystemUIMode',
+            )
+            .having(
+              (call) => call.arguments,
+              'mode',
+              'SystemUiMode.edgeToEdge',
+            ),
+      ),
+    );
+
+    tester.view.physicalSize = const Size(1000, 500);
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+
+    expect(
+      systemUiCalls
+          .where(
+            (call) =>
+                call.method == 'SystemChrome.setEnabledSystemUIMode' &&
+                call.arguments == 'SystemUiMode.edgeToEdge',
+          )
+          .length,
+      2,
+    );
   });
 
   testWidgets(

@@ -4,7 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:readalong/manager.dart';
-import 'package:readalong/models.dart';
+import 'package:readalong/models/readalong_document.dart';
 
 class ReaderPage extends StatefulWidget {
   final ReadAlongPage page;
@@ -13,6 +13,8 @@ class ReaderPage extends StatefulWidget {
   final bool showTranslations;
   final Color? highlightColor;
   final String? imageUri;
+  final VoidCallback? onBackgroundTap;
+  final ValueChanged<double>? onTextScrollOffsetChanged;
   final Manager manager;
   final bool audioEnabled;
   final Object? audioError;
@@ -28,6 +30,8 @@ class ReaderPage extends StatefulWidget {
     this.showTranslations = true,
     this.highlightColor,
     this.imageUri,
+    this.onBackgroundTap,
+    this.onTextScrollOffsetChanged,
   });
 
   @override
@@ -52,7 +56,9 @@ class _ReaderPageState extends State<ReaderPage> {
     super.initState();
     _lastActiveWordId = widget.manager.activeWordId;
     widget.manager.addListener(_handleManagerChanged);
+    _textScrollController.addListener(_reportTextScrollOffset);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _reportTextScrollOffset();
       _scrollToActiveSentence();
     });
   }
@@ -90,8 +96,14 @@ class _ReaderPageState extends State<ReaderPage> {
     widget.manager.removeListener(_handleManagerChanged);
     _removeImageStreamListener();
     _disposeWordRecognizers();
+    _textScrollController.removeListener(_reportTextScrollOffset);
     _textScrollController.dispose();
     super.dispose();
+  }
+
+  void _reportTextScrollOffset() {
+    if (!_textScrollController.hasClients) return;
+    widget.onTextScrollOffsetChanged?.call(_textScrollController.offset);
   }
 
   void _resolveImageDimensions() {
@@ -206,14 +218,18 @@ class _ReaderPageState extends State<ReaderPage> {
           child: LayoutBuilder(
             builder: (context, constraints) {
               final width = constraints.maxWidth;
+              final isCompactLandscape =
+                  widget.imageUri != null &&
+                  MediaQuery.orientationOf(context) == Orientation.landscape &&
+                  constraints.maxHeight < 600;
               final imageHeight = width.isFinite
                   ? width / _imageAspectRatio
                   : 200.0;
-              return CustomScrollView(
+              final textView = CustomScrollView(
                 key: _textViewportKey,
                 controller: _textScrollController,
                 slivers: [
-                  if (widget.imageUri != null)
+                  if (widget.imageUri != null && !isCompactLandscape)
                     SliverPersistentHeader(
                       pinned: true,
                       delegate: _CollapsingImageHeaderDelegate(
@@ -223,6 +239,7 @@ class _ReaderPageState extends State<ReaderPage> {
                         errorMessage:
                             'Unable to load page image: ${page.imageUrl}',
                         errorColor: Theme.of(context).colorScheme.error,
+                        onTap: widget.onBackgroundTap,
                       ),
                     ),
                   SliverToBoxAdapter(
@@ -250,10 +267,69 @@ class _ReaderPageState extends State<ReaderPage> {
                   ),
                 ],
               );
+              final interactiveTextView = GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTapUp: _handleTextAreaTap,
+                child: textView,
+              );
+              if (!isCompactLandscape) return interactiveTextView;
+
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    width: width.isFinite ? width * 0.4 : 320,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: widget.onBackgroundTap,
+                      child: _buildLandscapeImage(
+                        context,
+                        width.isFinite ? width * 0.4 : 320,
+                        constraints.maxHeight,
+                      ),
+                    ),
+                  ),
+                  Expanded(child: interactiveTextView),
+                ],
+              );
             },
           ),
         ),
       ],
+    );
+  }
+
+  void _handleTextAreaTap(TapUpDetails details) {
+    final position = details.globalPosition;
+    for (final key in _sentenceKeys.values) {
+      final renderObject = key.currentContext?.findRenderObject();
+      if (renderObject is! RenderBox || !renderObject.hasSize) continue;
+      final rect = renderObject.localToGlobal(Offset.zero) & renderObject.size;
+      if (rect.contains(position)) return;
+    }
+    widget.onBackgroundTap?.call();
+  }
+
+  Widget _buildLandscapeImage(
+    BuildContext context,
+    double width,
+    double height,
+  ) {
+    return Image.asset(
+      widget.imageUri!,
+      width: width,
+      height: height,
+      fit: BoxFit.contain,
+      errorBuilder: (context, error, stackTrace) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Text(
+            'Unable to load page image: ${page.imageUrl}',
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      ),
     );
   }
 
@@ -353,6 +429,7 @@ class _CollapsingImageHeaderDelegate extends SliverPersistentHeaderDelegate {
     required this.maxHeight,
     required this.errorMessage,
     required this.errorColor,
+    required this.onTap,
   });
 
   final String imageUri;
@@ -360,6 +437,7 @@ class _CollapsingImageHeaderDelegate extends SliverPersistentHeaderDelegate {
   final double maxHeight;
   final String errorMessage;
   final Color errorColor;
+  final VoidCallback? onTap;
 
   @override
   double get minExtent => 200;
@@ -375,16 +453,20 @@ class _CollapsingImageHeaderDelegate extends SliverPersistentHeaderDelegate {
   ) {
     return SizedBox.expand(
       key: imageBoxKey,
-      child: Image.asset(
-        imageUri,
-        fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) => Center(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(
-              errorMessage,
-              style: TextStyle(color: errorColor),
-              textAlign: TextAlign.center,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Image.asset(
+          imageUri,
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) => Center(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                errorMessage,
+                style: TextStyle(color: errorColor),
+                textAlign: TextAlign.center,
+              ),
             ),
           ),
         ),
@@ -398,6 +480,7 @@ class _CollapsingImageHeaderDelegate extends SliverPersistentHeaderDelegate {
         imageBoxKey != oldDelegate.imageBoxKey ||
         maxHeight != oldDelegate.maxHeight ||
         errorMessage != oldDelegate.errorMessage ||
-        errorColor != oldDelegate.errorColor;
+        errorColor != oldDelegate.errorColor ||
+        onTap != oldDelegate.onTap;
   }
 }

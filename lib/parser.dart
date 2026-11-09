@@ -1,4 +1,4 @@
-import 'package:readalong/models.dart';
+import 'package:readalong/models/readalong_document.dart';
 import 'package:xml/xml.dart';
 
 class ReadalongParser {

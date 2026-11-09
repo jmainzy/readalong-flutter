@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 
-import 'models.dart';
+import 'models/readalong_document.dart';
 import 'parser.dart';
 
 enum ButtonState { playingLoading, pausedLoading, completed, paused, playing }
