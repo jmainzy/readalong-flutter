@@ -551,17 +551,24 @@ class Manager extends ChangeNotifier {
 
   Future<void> playWord(ReadAlongWord word) async {
     if (!word.isAligned || _audioSource == null || _isAudioLoading) return;
+    // A word tap while playing seeks playback without turning it into a
+    // one-word preview; from pause, playback is bounded to the selected word.
+    final continuePlayback = _isPlaying;
     _pausedAtPageIndex = null;
     _clearWordPlaybackEnd();
     final generation = _wordPlaybackGeneration;
     final end = word.start! + word.duration!;
-    _wordPlaybackHighlightId = word.id;
+    if (!continuePlayback) {
+      _wordPlaybackHighlightId = word.id;
+      _wordPlaybackEnd = end;
+    }
     _activeWordId = word.id;
     notifyListeners();
     try {
       await _player.seek(word.start);
       if (_disposed || generation != _wordPlaybackGeneration) return;
-      _wordPlaybackEnd = end;
+      _position = word.start!;
+      _updateActiveWord(_position);
       await _player.play();
     } catch (error) {
       if (generation == _wordPlaybackGeneration) {
