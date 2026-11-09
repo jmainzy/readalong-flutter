@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 
-import 'models.dart';
+import 'models/readalong_document.dart';
 import 'parser.dart';
 
 enum ButtonState { playingLoading, pausedLoading, completed, paused, playing }
@@ -551,30 +551,18 @@ class Manager extends ChangeNotifier {
 
   Future<void> playWord(ReadAlongWord word) async {
     if (!word.isAligned || _audioSource == null || _isAudioLoading) return;
-    final continuePlayback = _isPlaying;
     _pausedAtPageIndex = null;
     _clearWordPlaybackEnd();
     final generation = _wordPlaybackGeneration;
     final end = word.start! + word.duration!;
-    if (continuePlayback) {
-      _position = word.start!;
-      _updateActiveWord(_position);
-    } else {
-      _wordPlaybackHighlightId = word.id;
-      _activeWordId = word.id;
-    }
+    _wordPlaybackHighlightId = word.id;
+    _activeWordId = word.id;
     notifyListeners();
     try {
       await _player.seek(word.start);
       if (_disposed || generation != _wordPlaybackGeneration) return;
-      if (continuePlayback) {
-        _position = word.start!;
-        _updateActiveWord(_position);
-        notifyListeners();
-      } else {
-        _wordPlaybackEnd = end;
-        await _player.play();
-      }
+      _wordPlaybackEnd = end;
+      await _player.play();
     } catch (error) {
       if (generation == _wordPlaybackGeneration) {
         _clearWordPlaybackEnd();

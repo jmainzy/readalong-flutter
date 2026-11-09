@@ -10,6 +10,8 @@ class AudioPlayerWidget extends StatelessWidget {
     super.key,
     required this.manager,
     this.title,
+    this.onAutoplayChanged,
+    this.onSpeedChanged,
     this.onPreviousPage,
     this.onNextPage,
     this.onReplay,
@@ -19,6 +21,8 @@ class AudioPlayerWidget extends StatelessWidget {
 
   final Manager manager;
   final String? title;
+  final ValueChanged<bool>? onAutoplayChanged;
+  final ValueChanged<double>? onSpeedChanged;
   final VoidCallback? onPreviousPage;
   final VoidCallback? onNextPage;
   final VoidCallback? onReplay;
@@ -42,10 +46,13 @@ class AudioPlayerWidget extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: _buildProgressSlider(),
             ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: _buildTimestamps(context),
-            ),
+            if (MediaQuery.orientationOf(context) == Orientation.portrait)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: _buildTimestamps(context),
+              )
+            else
+              Container(),
             Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -63,6 +70,7 @@ class AudioPlayerWidget extends StatelessWidget {
                         tooltip: autoplay ? 'Autoplay On' : 'Autoplay Off',
                         onPressed: () {
                           manager.togglePagePlaybackMode();
+                          onAutoplayChanged?.call(manager.autoplay);
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
                               content: Text(
@@ -113,14 +121,22 @@ class AudioPlayerWidget extends StatelessWidget {
                     ],
                   ),
                 ),
-                SizedBox(width: 48),
+                SizedBox(
+                  width: 48,
+                  child: SpeedButton(
+                    manager: manager,
+                    onSpeedChanged: onSpeedChanged,
+                  ),
+                ),
               ],
             ),
 
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                if (title != null && title!.isNotEmpty)
+                if (MediaQuery.orientationOf(context) == Orientation.portrait &&
+                    title != null &&
+                    title!.isNotEmpty)
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -136,9 +152,9 @@ class AudioPlayerWidget extends StatelessWidget {
                   )
                 else
                   const SizedBox.shrink(),
-                SizedBox(width: 48, child: SpeedButton(manager: manager)),
               ],
             ),
+            SizedBox(height: 8),
           ],
         ),
       ),

@@ -3,8 +3,13 @@ import 'package:readalong/manager.dart';
 
 class SpeedButton extends StatefulWidget {
   final Manager manager;
+  final ValueChanged<double>? onSpeedChanged;
 
-  const SpeedButton({super.key, required this.manager});
+  const SpeedButton({
+    super.key,
+    required this.manager,
+    this.onSpeedChanged,
+  });
   @override
   State<SpeedButton> createState() => _SpeedButtonState();
 }
@@ -52,7 +57,9 @@ class _SpeedButtonState extends State<SpeedButton> {
                   value: _speedIndex(widget.manager.speed).toDouble(),
                   label: '${_formatSpeed(widget.manager.speed)}x',
                   onChanged: (index) {
-                    widget.manager.setSpeed(speeds[index.round()]);
+                    final speed = speeds[index.round()];
+                    widget.manager.setSpeed(speed);
+                    widget.onSpeedChanged?.call(speed);
                   },
                 ),
               ],

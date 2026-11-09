@@ -1,14 +1,18 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:readalong/components/reader_page.dart';
-import 'package:readalong/models.dart';
+import 'package:readalong/models/readalong_document.dart';
+import 'package:readalong/models/readalong_position.dart';
 
 import 'components/audio_widget.dart';
 import 'manager.dart';
 
 export 'manager.dart';
+export 'models/readalong_position.dart';
 
 /// Displays a ReadAlong XML document with word-level audio playback.
 ///
@@ -30,6 +34,10 @@ class ReadAlong extends StatefulWidget {
     this.imagesFolder,
     this.audioSource,
     this.audioTitle,
+    this.onAutoplayChanged,
+    this.onSpeedChanged,
+    this.onReaderSurfaceTap,
+    this.onPositionChanged,
     this.showTranslations = true,
     this.textStyle,
     this.translationTextStyle,
@@ -57,6 +65,23 @@ class ReadAlong extends StatefulWidget {
   /// Optional title shown above the audio controls, such as a speaker name.
   final String? audioTitle;
 
+  /// Called when the user changes whether playback continues automatically
+  /// between pages.
+  final ValueChanged<bool>? onAutoplayChanged;
+
+  /// Called when the user changes the playback speed.
+  final ValueChanged<double>? onSpeedChanged;
+
+  /// Called when the reader's image or blank text area is tapped.
+  final VoidCallback? onReaderSurfaceTap;
+
+  /// Called when the current reading position changes and immediately before
+  /// the reader is disposed.
+  ///
+  /// Use the snapshot to save a bookmark. [ReadAlongPosition.audioPosition]
+  /// is null when no audio source is configured.
+  final ValueChanged<ReadAlongPosition>? onPositionChanged;
+
   /// Whether translation sentences in the XML should be displayed.
   final bool showTranslations;
 
@@ -80,9 +105,12 @@ class ReadAlong extends StatefulWidget {
 class _ReadAlongState extends State<ReadAlong> {
   late final Manager _manager;
   final PageController _pageController = PageController();
+  bool _isFullscreen = false;
   int _currentPageIndex = 0;
   int? _requestedPageIndex;
   String? _lastFollowedWordId;
+  final Map<String, double> _textScrollOffsets = {};
+  ReadAlongPosition? _lastReportedPosition;
 
   @override
   void initState() {
@@ -98,8 +126,27 @@ class _ReadAlongState extends State<ReadAlong> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final isMobilePlatform =
+        defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+    final shouldBeFullscreen =
+        isMobilePlatform &&
+        MediaQuery.orientationOf(context) == Orientation.landscape;
+    if (_isFullscreen == shouldBeFullscreen) return;
+
+    _isFullscreen = shouldBeFullscreen;
+    unawaited(_setSystemUiMode(_isFullscreen));
+  }
+
+  @override
   void didUpdateWidget(covariant ReadAlong oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.onPositionChanged != widget.onPositionChanged) {
+      _lastReportedPosition = null;
+      _reportPosition();
+    }
     if (oldWidget.xml != widget.xml ||
         oldWidget.xmlAsset != widget.xmlAsset ||
         oldWidget.audioSource != widget.audioSource) {
@@ -119,10 +166,26 @@ class _ReadAlongState extends State<ReadAlong> {
 
   @override
   void dispose() {
+    _reportPosition(force: true);
+    if (_isFullscreen) {
+      unawaited(_setSystemUiMode(false));
+    }
     _manager.removeListener(_followActiveWord);
     _manager.dispose();
     _pageController.dispose();
     super.dispose();
+  }
+
+  Future<void> _setSystemUiMode(bool fullscreen) {
+    if (fullscreen && defaultTargetPlatform == TargetPlatform.iOS) {
+      return SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.manual,
+        overlays: const [],
+      );
+    }
+    return SystemChrome.setEnabledSystemUIMode(
+      fullscreen ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge,
+    );
   }
 
   @override
@@ -158,6 +221,7 @@ class _ReadAlongState extends State<ReadAlong> {
                   setState(() {
                     _currentPageIndex = pageIndex;
                   });
+                  _reportPosition();
                 },
                 itemBuilder: (context, pageIndex) {
                   final page = document.pages[pageIndex];
@@ -171,6 +235,9 @@ class _ReadAlongState extends State<ReadAlong> {
                     textStyle: widget.textStyle,
                     showTranslations: widget.showTranslations,
                     highlightColor: widget.highlightColor,
+                    onBackgroundTap: widget.onReaderSurfaceTap,
+                    onTextScrollOffsetChanged: (offset) =>
+                        _updateTextScrollOffset(page.id, offset),
                     imageUri:
                         widget.imagesFolder != null && page.imageUrl != null
                         ? _manager.getImageAsset(page.imageUrl!)
@@ -183,6 +250,8 @@ class _ReadAlongState extends State<ReadAlong> {
                 ? AudioPlayerWidget(
                     manager: _manager,
                     title: widget.audioTitle,
+                    onAutoplayChanged: widget.onAutoplayChanged,
+                    onSpeedChanged: widget.onSpeedChanged,
                     canGoToPreviousPage: _currentPageIndex > 0,
                     canGoToNextPage: _currentPageIndex < pageCount - 1,
                     onPreviousPage: _goToPreviousPage,
@@ -196,7 +265,32 @@ class _ReadAlongState extends State<ReadAlong> {
     );
   }
 
+  void _reportPosition({bool force = false}) {
+    final document = _manager.document;
+    if (document == null || document.pages.isEmpty) return;
+    final pageIndex = _currentPageIndex
+        .clamp(0, document.pages.length - 1)
+        .toInt();
+    final page = document.pages[pageIndex];
+    final position = ReadAlongPosition(
+      pageIndex: pageIndex,
+      audioPosition: widget.audioSource == null ? null : _manager.position,
+      activeWordId: widget.audioSource == null ? null : _manager.activeWordId,
+      textScrollOffset: _textScrollOffsets[page.id] ?? 0,
+    );
+    if (!force && position == _lastReportedPosition) return;
+    _lastReportedPosition = position;
+    widget.onPositionChanged?.call(position);
+  }
+
+  void _updateTextScrollOffset(String pageId, double offset) {
+    if (_textScrollOffsets[pageId] == offset) return;
+    _textScrollOffsets[pageId] = offset;
+    _reportPosition();
+  }
+
   void _followActiveWord() {
+    _reportPosition();
     final activeWordId = _manager.activeWordId;
     if (activeWordId == _lastFollowedWordId) return;
     _lastFollowedWordId = activeWordId;
