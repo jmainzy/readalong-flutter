@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -626,6 +628,33 @@ void main() {
     expect(manager.replayCalled, isTrue);
   });
 
+  test(
+    'replay after completion returns the player to the playing state',
+    () async {
+      final player = _CompletedReplayAudioPlayer();
+      final manager = Manager(
+        xml: _sampleXml,
+        xmlAsset: null,
+        audioSource: null,
+        audioPlayer: player,
+      );
+      addTearDown(() async {
+        manager.dispose();
+        await player.close();
+        await player.dispose();
+      });
+
+      await manager.initialize();
+      player.complete();
+      expect(manager.buttonState.value, ButtonState.completed);
+
+      await manager.replay();
+
+      expect(player.commands, ['pause', 'seek', 'play']);
+      expect(manager.buttonState.value, ButtonState.playing);
+    },
+  );
+
   group('ReadAlongDocument.fromXml', () {
     test('parses pages, metadata, and word timing', () {
       final document = ReadAlongDocument.fromXml(_sampleXml);
@@ -864,5 +893,62 @@ class _ReplayManager extends Manager {
   void dispose() {
     _completedState.dispose();
     super.dispose();
+  }
+}
+
+class _CompletedReplayAudioPlayer extends AudioPlayer {
+  _CompletedReplayAudioPlayer() : super(handleInterruptions: false);
+
+  final StreamController<PlayerState> _playerStates =
+      StreamController<PlayerState>.broadcast(sync: true);
+  final StreamController<Duration> _positions =
+      StreamController<Duration>.broadcast(sync: true);
+  final List<String> commands = [];
+  bool _isPlaying = false;
+  ProcessingState _processingState = ProcessingState.idle;
+
+  @override
+  Stream<PlayerState> get playerStateStream => _playerStates.stream;
+
+  @override
+  Stream<Duration> get positionStream => _positions.stream;
+
+  @override
+  double get speed => 1;
+
+  void complete() {
+    _isPlaying = true;
+    _processingState = ProcessingState.completed;
+    _playerStates.add(PlayerState(_isPlaying, _processingState));
+  }
+
+  @override
+  Future<void> pause() async {
+    commands.add('pause');
+    _isPlaying = false;
+    _playerStates.add(PlayerState(_isPlaying, _processingState));
+  }
+
+  @override
+  Future<void> seek(Duration? position, {int? index}) async {
+    commands.add('seek');
+    if (!_isPlaying && _processingState == ProcessingState.completed) {
+      _processingState = ProcessingState.ready;
+    }
+    _positions.add(position ?? Duration.zero);
+    _playerStates.add(PlayerState(_isPlaying, _processingState));
+  }
+
+  @override
+  Future<void> play() async {
+    commands.add('play');
+    if (_isPlaying) return;
+    _isPlaying = true;
+    _playerStates.add(PlayerState(_isPlaying, _processingState));
+  }
+
+  Future<void> close() async {
+    await _playerStates.close();
+    await _positions.close();
   }
 }

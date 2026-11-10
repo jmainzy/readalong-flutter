@@ -480,7 +480,11 @@ class Manager extends ChangeNotifier {
     _clearWordPlaybackEnd();
     _updateActiveWord(Duration.zero);
     try {
+      await _player.pause();
       await _player.seek(Duration.zero);
+      _position = Duration.zero;
+      _isCompleted = false;
+      _updateActiveWord(_position);
       await _player.play();
     } catch (error) {
       _handleAudioError(error);

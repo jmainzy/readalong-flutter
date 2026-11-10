@@ -71,8 +71,16 @@ class AudioPlayerWidget extends StatelessWidget {
                         onPressed: () {
                           manager.togglePagePlaybackMode();
                           onAutoplayChanged?.call(manager.autoplay);
+                          final screenWidth = MediaQuery.of(context).size.width;
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
+                              behavior: SnackBarBehavior.floating,
+                              margin: EdgeInsets.fromLTRB(
+                                screenWidth * 0.01,
+                                0,
+                                screenWidth * 0.6,
+                                126,
+                              ),
                               content: Text(
                                 'Autoplay ${manager.autoplay ? 'on' : 'off'}',
                               ),
