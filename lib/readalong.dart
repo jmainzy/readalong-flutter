@@ -14,7 +14,7 @@ import 'manager.dart';
 export 'manager.dart';
 export 'models/readalong_position.dart';
 
-/// Displays a ReadAlong XML document with word-level audio playback.
+/// Displays a ReadAlong XML or ELAN EAF document with aligned audio playback.
 ///
 /// Pass the XML text with [xml], or the path to a Flutter asset with
 /// [xmlAsset]. An optional [audioSource] enables playback, word tapping, and
@@ -22,7 +22,7 @@ export 'models/readalong_position.dart';
 ///
 /// ```dart
 /// ReadAlongPlayer(
-///   xmlAsset: 'assets/story.readalong',
+///   xmlAsset: 'assets/story.eaf',
 ///   audioSource: AudioSource.asset('assets/story.mp3'),
 /// )
 /// ```
@@ -44,10 +44,10 @@ class ReadAlong extends StatefulWidget {
     this.highlightColor,
   }) : assert((xml == null) != (xmlAsset == null));
 
-  /// XML contents of a `.readalong` document.
+  /// XML contents of a `.readalong` or ELAN `.eaf` document.
   final String? xml;
 
-  /// Flutter asset path for a `.readalong` document.
+  /// Flutter asset path for a `.readalong` or ELAN `.eaf` document.
   final String? xmlAsset;
 
   /// Asset folder containing the page images referenced by the document.

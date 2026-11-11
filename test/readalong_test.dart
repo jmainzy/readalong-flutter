@@ -40,6 +40,42 @@ const _translationXml = '''
 </read-along>
 ''';
 
+const _elanXml = '''
+<ANNOTATION_DOCUMENT AUTHOR="Test author" DATE="2026-01-01">
+  <HEADER TIME_UNITS="milliseconds">
+    <MEDIA_DESCRIPTOR MEDIA_URL="audio.wav" MIME_TYPE="audio/x-wav" />
+  </HEADER>
+  <TIME_ORDER>
+    <TIME_SLOT TIME_SLOT_ID="start" TIME_VALUE="1250" />
+    <TIME_SLOT TIME_SLOT_ID="end" TIME_VALUE="3250" />
+    <TIME_SLOT TIME_SLOT_ID="next" TIME_VALUE="5000" />
+  </TIME_ORDER>
+  <TIER TIER_ID="Transcription" LINGUISTIC_TYPE_REF="Transcription">
+    <ANNOTATION>
+      <ALIGNABLE_ANNOTATION ANNOTATION_ID="utterance-1"
+          TIME_SLOT_REF1="start" TIME_SLOT_REF2="end">
+        <ANNOTATION_VALUE>Hēsci! Hiyowat.</ANNOTATION_VALUE>
+      </ALIGNABLE_ANNOTATION>
+    </ANNOTATION>
+    <ANNOTATION>
+      <ALIGNABLE_ANNOTATION ANNOTATION_ID="utterance-2"
+          TIME_SLOT_REF1="end" TIME_SLOT_REF2="next">
+        <ANNOTATION_VALUE>Second sentence.</ANNOTATION_VALUE>
+      </ALIGNABLE_ANNOTATION>
+    </ANNOTATION>
+  </TIER>
+  <TIER TIER_ID="Phrase Free Translation" LINGUISTIC_TYPE_REF="Translation"
+      PARENT_REF="Transcription">
+    <ANNOTATION>
+      <REF_ANNOTATION ANNOTATION_ID="translation-1"
+          ANNOTATION_REF="utterance-1">
+        <ANNOTATION_VALUE>Hello! Again today.</ANNOTATION_VALUE>
+      </REF_ANNOTATION>
+    </ANNOTATION>
+  </TIER>
+</ANNOTATION_DOCUMENT>
+''';
+
 const _imageXml = '''
 <read-along>
   <text xml:lang="eng">
@@ -683,6 +719,32 @@ void main() {
       expect(
         sentence.segments.map((segment) => segment.text).join(),
         'Hello, world!',
+      );
+    });
+
+    test('parses ELAN transcription and linked translation timings', () {
+      final document = ReadAlongDocument.fromXml(_elanXml);
+      final firstParagraph = document.pages.single.paragraphs.first;
+      final transcription = firstParagraph.sentences.first;
+      final translation = firstParagraph.sentences.last;
+      final timedSentence = transcription.segments.single as ReadAlongWord;
+
+      expect(document.pages, hasLength(1));
+      expect(document.pages.single.imageUrl, isNull);
+      expect(document.metadata['author'], 'Test author');
+      expect(transcription.id, 'utterance-1');
+      expect(timedSentence.id, 'utterance-1');
+      expect(timedSentence.text, 'Hēsci! Hiyowat.');
+      expect(timedSentence.start, const Duration(milliseconds: 1250));
+      expect(timedSentence.duration, const Duration(milliseconds: 2000));
+      expect(translation.isTranslation, isTrue);
+      expect(translation.segments.single.text, 'Hello! Again today.');
+      expect(document.pages.single.paragraphs, hasLength(2));
+      expect(
+        (document.pages.single.paragraphs.last.sentences.first.segments.single
+                as ReadAlongWord)
+            .start,
+        const Duration(milliseconds: 3250),
       );
     });
 
