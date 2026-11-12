@@ -25,9 +25,10 @@ class Manager extends ChangeNotifier {
        _xml = xml,
        _xmlAsset = xmlAsset,
        _audioSource = audioSource,
-       _parser = parser ?? ReadalongParser() {
+       _parser = parser ?? ReadalongParser(),
+       _hasExternalPlaybackController = playbackController != null {
     _player = audioPlayer ?? AudioPlayer();
-    _ownsAudioPlayer = audioPlayer == null;
+    _ownsAudioPlayer = audioPlayer == null && playbackController == null;
     _playbackController =
         playbackController ?? _JustAudioPlaybackController(_player);
   }
@@ -37,6 +38,7 @@ class Manager extends ChangeNotifier {
   AudioSource? _audioSource;
   final ReadalongParser _parser;
   late final bool _ownsAudioPlayer;
+  bool _hasExternalPlaybackController;
   late final AudioPlayer _player;
   late PlaybackController _playbackController;
   final String? imagesFolder;
@@ -105,6 +107,7 @@ class Manager extends ChangeNotifier {
     _xmlAsset = xmlAsset;
     _audioSource = audioSource;
     if (controllerChanged) {
+      _hasExternalPlaybackController = playbackController != null;
       _playbackController =
           playbackController ?? _JustAudioPlaybackController(_player);
       await _cancelPlaybackSubscriptions();
@@ -141,7 +144,6 @@ class Manager extends ChangeNotifier {
   Future<void> _configureAudio() async {
     final configuration = ++_audioConfiguration;
     _clearWordPlaybackEnd();
-    final source = _audioSource;
     _audioError = null;
     _hasConfiguredAudio = true;
     _duration = _playbackController.duration;
@@ -150,6 +152,11 @@ class Manager extends ChangeNotifier {
     _updateActiveWord(_position);
     notifyListeners();
 
+    if (_hasExternalPlaybackController) {
+      return;
+    }
+
+    final source = _audioSource;
     if (source == null) {
       Object? stopError;
       if (_hasConfiguredAudio) {
@@ -379,6 +386,43 @@ class Manager extends ChangeNotifier {
     );
   }
 
+  int pageIndexForPosition(Duration position) {
+    final pages = _document?.pages;
+    if (pages == null || pages.isEmpty) return 0;
+
+    int candidate = 0;
+    for (final (pageIndex, page) in pages.indexed) {
+      final range = _pagePlaybackRange(pageIndex, page);
+      if (range != null) {
+        if (position >= range.start) {
+          candidate = pageIndex;
+        }
+        if (position <= range.end) {
+          return pageIndex;
+        }
+      }
+    }
+    return candidate;
+  }
+
+  ReadAlongWord? nearestWordForPosition(Duration position) {
+    ReadAlongWord? candidate;
+    for (final word in _document?.words ?? const <ReadAlongWord>[]) {
+      if (!word.isAligned) continue;
+      final start = word.start!;
+      final end = start + word.duration!;
+      if (position >= start && position <= end) {
+        return word;
+      }
+      if (start <= position) {
+        candidate = word;
+      } else if (candidate == null) {
+        return word;
+      }
+    }
+    return candidate;
+  }
+
   Future<void> _finishPagePlayback(Duration end, int generation) async {
     try {
       await _playbackController.pause();
@@ -466,7 +510,8 @@ class Manager extends ChangeNotifier {
   }
 
   Future<void> play() async {
-    if ((_audioSource == null) || isAudioLoading) {
+    if ((!_hasExternalPlaybackController && _audioSource == null) ||
+        isAudioLoading) {
       return;
     }
     final pausedPageIndex = _pausedAtPageIndex;
@@ -592,7 +637,9 @@ class Manager extends ChangeNotifier {
   }
 
   Future<void> playWord(ReadAlongWord word) async {
-    if (!word.isAligned || (_audioSource == null) || isAudioLoading) {
+    if (!word.isAligned ||
+        (!_hasExternalPlaybackController && _audioSource == null) ||
+        isAudioLoading) {
       return;
     }
     // A word tap while playing seeks playback without turning it into a

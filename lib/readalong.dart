@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:readalong/components/reader_page.dart';
-import 'package:readalong/models/readalong_document.dart';
 import 'package:readalong/models/readalong_position.dart';
 import 'package:readalong/models/playback_controller.dart';
 
@@ -120,7 +119,6 @@ class _ReadAlongState extends State<ReadAlong> {
   bool _isFullscreen = false;
   int _currentPageIndex = 0;
   int? _requestedPageIndex;
-  String? _lastFollowedWordId;
   final Map<String, double> _textScrollOffsets = {};
   ReadAlongPosition? _lastReportedPosition;
 
@@ -166,7 +164,6 @@ class _ReadAlongState extends State<ReadAlong> {
         oldWidget.playbackController != widget.playbackController) {
       _currentPageIndex = 0;
       _requestedPageIndex = null;
-      _lastFollowedWordId = null;
       if (_pageController.hasClients) _pageController.jumpToPage(0);
       unawaited(
         _manager.updateSources(
@@ -221,10 +218,22 @@ class _ReadAlongState extends State<ReadAlong> {
           return const Center(child: CircularProgressIndicator());
         }
 
+        final targetPage = _manager.pageIndexForPosition(_manager.position);
+        if (_currentPageIndex == 0 && targetPage > 0) {
+          _currentPageIndex = targetPage;
+        }
         if (_currentPageIndex >= document.pages.length) {
           _currentPageIndex = document.pages.length - 1;
         }
         final pageCount = document.pages.length;
+
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted &&
+              _pageController.hasClients &&
+              _pageController.page?.round() != _currentPageIndex) {
+            _pageController.jumpToPage(_currentPageIndex);
+          }
+        });
 
         return Column(
           children: [
@@ -314,24 +323,17 @@ class _ReadAlongState extends State<ReadAlong> {
 
   void _followActiveWord() {
     _reportPosition();
-    final activeWordId = _manager.activeWordId;
-    if (activeWordId == _lastFollowedWordId) return;
-    _lastFollowedWordId = activeWordId;
-    if (activeWordId == null) return;
-
     final pages = _manager.document?.pages;
-    if (pages == null) return;
-    final pageIndex = pages.indexWhere(
-      (page) => page.paragraphs.any(
-        (paragraph) => paragraph.sentences.any(
-          (sentence) => sentence.segments.any(
-            (segment) => segment is ReadAlongWord && segment.id == activeWordId,
-          ),
-        ),
-      ),
-    );
-    if (pageIndex == -1 || pageIndex == _currentPageIndex) return;
-    _changePage(pageIndex);
+    if (pages == null || pages.isEmpty) return;
+
+    final targetPageIndex = _manager.pageIndexForPosition(_manager.position);
+    if (targetPageIndex != _currentPageIndex) {
+      if (_pageController.hasClients) {
+        _changePage(targetPageIndex);
+      } else {
+        _currentPageIndex = targetPageIndex;
+      }
+    }
   }
 
   void _goToPreviousPage() {
@@ -351,7 +353,10 @@ class _ReadAlongState extends State<ReadAlong> {
   }
 
   void _changePage(int pageIndex) {
-    if (!_pageController.hasClients) return;
+    if (!_pageController.hasClients) {
+      _currentPageIndex = pageIndex;
+      return;
+    }
     if (pageIndex == _currentPageIndex || pageIndex == _requestedPageIndex) {
       return;
     }

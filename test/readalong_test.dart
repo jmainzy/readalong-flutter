@@ -174,6 +174,23 @@ void main() {
     await controller.dispose();
   });
 
+  test('external playback controller restores initial position and active word', () async {
+    final controller = _TestPlaybackController(
+      initialPosition: const Duration(milliseconds: 800),
+    );
+    final manager = Manager(
+      xml: _sampleXml,
+      xmlAsset: null,
+      audioSource: null,
+      playbackController: controller,
+    );
+    addTearDown(manager.dispose);
+
+    await manager.initialize();
+    expect(manager.position, const Duration(milliseconds: 800));
+    expect(manager.activeWordId, 'word-2');
+  });
+
   test('external playback state mirrors JustAudio state transitions', () async {
     final controller = _TestPlaybackController();
     final manager = Manager(
@@ -1114,6 +1131,9 @@ class _CompletedReplayAudioPlayer extends just_audio.AudioPlayer {
 }
 
 class _TestPlaybackController implements PlaybackController {
+  _TestPlaybackController({Duration initialPosition = Duration.zero})
+      : _position = initialPosition;
+
   final StreamController<Duration> _positions =
       StreamController<Duration>.broadcast(sync: true);
   final StreamController<Duration?> _durations =
