@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:just_audio/just_audio.dart';
+import 'package:just_audio/just_audio.dart' as just_audio;
 import 'package:readalong/components/audio_widget.dart';
 import 'package:readalong/components/reader_page.dart';
 import 'package:readalong/models/readalong_document.dart';
@@ -38,6 +38,42 @@ const _translationXml = '''
     </body>
   </text>
 </read-along>
+''';
+
+const _elanXml = '''
+<ANNOTATION_DOCUMENT AUTHOR="Test author" DATE="2026-01-01">
+  <HEADER TIME_UNITS="milliseconds">
+    <MEDIA_DESCRIPTOR MEDIA_URL="audio.wav" MIME_TYPE="audio/x-wav" />
+  </HEADER>
+  <TIME_ORDER>
+    <TIME_SLOT TIME_SLOT_ID="start" TIME_VALUE="1250" />
+    <TIME_SLOT TIME_SLOT_ID="end" TIME_VALUE="3250" />
+    <TIME_SLOT TIME_SLOT_ID="next" TIME_VALUE="5000" />
+  </TIME_ORDER>
+  <TIER TIER_ID="Transcription" LINGUISTIC_TYPE_REF="Transcription">
+    <ANNOTATION>
+      <ALIGNABLE_ANNOTATION ANNOTATION_ID="utterance-1"
+          TIME_SLOT_REF1="start" TIME_SLOT_REF2="end">
+        <ANNOTATION_VALUE>Hēsci! Hiyowat.</ANNOTATION_VALUE>
+      </ALIGNABLE_ANNOTATION>
+    </ANNOTATION>
+    <ANNOTATION>
+      <ALIGNABLE_ANNOTATION ANNOTATION_ID="utterance-2"
+          TIME_SLOT_REF1="end" TIME_SLOT_REF2="next">
+        <ANNOTATION_VALUE>Second sentence.</ANNOTATION_VALUE>
+      </ALIGNABLE_ANNOTATION>
+    </ANNOTATION>
+  </TIER>
+  <TIER TIER_ID="Phrase Free Translation" LINGUISTIC_TYPE_REF="Translation"
+      PARENT_REF="Transcription">
+    <ANNOTATION>
+      <REF_ANNOTATION ANNOTATION_ID="translation-1"
+          ANNOTATION_REF="utterance-1">
+        <ANNOTATION_VALUE>Hello! Again today.</ANNOTATION_VALUE>
+      </REF_ANNOTATION>
+    </ANNOTATION>
+  </TIER>
+</ANNOTATION_DOCUMENT>
 ''';
 
 const _imageXml = '''
@@ -108,6 +144,119 @@ void main() {
     expect(manager.xmlError, isNull);
     expect(manager.isAudioLoading, isFalse);
     expect(manager.position, Duration.zero);
+  });
+
+  test('external playback controller drives aligned reader playback', () async {
+    final controller = _TestPlaybackController();
+    final manager = Manager(
+      xml: _sampleXml,
+      xmlAsset: null,
+      audioSource: null,
+      playbackController: controller,
+    );
+
+    await manager.initialize();
+    expect(manager.duration, controller.duration);
+
+    await manager.play();
+    expect(controller.playCount, 1);
+
+    controller.emitPosition(const Duration(milliseconds: 500));
+    expect(manager.activeWordId, 'word-1');
+
+    await manager.replay();
+    expect(controller.pauseCount, 1);
+    expect(controller.seekPositions, [Duration.zero]);
+    expect(controller.playCount, 2);
+
+    manager.dispose();
+    expect(controller.isClosed, isFalse);
+    await controller.dispose();
+  });
+
+  test('external playback controller restores initial position and active word', () async {
+    final controller = _TestPlaybackController(
+      initialPosition: const Duration(milliseconds: 800),
+    );
+    final manager = Manager(
+      xml: _sampleXml,
+      xmlAsset: null,
+      audioSource: null,
+      playbackController: controller,
+    );
+    addTearDown(manager.dispose);
+
+    await manager.initialize();
+    expect(manager.position, const Duration(milliseconds: 800));
+    expect(manager.activeWordId, 'word-2');
+  });
+
+  test('external playback state mirrors JustAudio state transitions', () async {
+    final controller = _TestPlaybackController();
+    final manager = Manager(
+      xml: _sampleXml,
+      xmlAsset: null,
+      audioSource: null,
+      playbackController: controller,
+    );
+    addTearDown(manager.dispose);
+    await manager.initialize();
+
+    controller.emitState(PlayerState(false, ProcessingState.loading));
+    expect(manager.buttonState.value, ButtonState.pausedLoading);
+    expect(manager.isAudioLoading, isTrue);
+
+    controller.emitState(PlayerState(true, ProcessingState.buffering));
+    expect(manager.buttonState.value, ButtonState.playingLoading);
+    expect(manager.isAudioLoading, isTrue);
+    expect(manager.isPlaying, isTrue);
+
+    controller.emitState(PlayerState(true, ProcessingState.ready));
+    expect(manager.buttonState.value, ButtonState.playing);
+    expect(manager.isAudioLoading, isFalse);
+
+    controller.emitState(PlayerState(false, ProcessingState.completed));
+    expect(manager.buttonState.value, ButtonState.completed);
+    expect(manager.isCompleted, isTrue);
+    expect(manager.isPlaying, isFalse);
+
+    controller.emitState(PlayerState(false, ProcessingState.ready));
+    expect(manager.buttonState.value, ButtonState.paused);
+    expect(manager.isCompleted, isFalse);
+  });
+
+  testWidgets('external player hides reader controls and syncs text', (
+    tester,
+  ) async {
+    final controller = _TestPlaybackController();
+    final positions = <ReadAlongPosition>[];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: 500,
+          child: ReadAlong(
+            xml: _sampleXml,
+            playbackController: controller,
+            onPositionChanged: positions.add,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AudioPlayerWidget), findsNothing);
+    expect(find.textContaining('Hello'), findsOneWidget);
+
+    controller.emitPosition(const Duration(milliseconds: 500));
+    await tester.pump();
+
+    expect(positions.last.audioPosition, const Duration(milliseconds: 500));
+    expect(positions.last.activeWordId, 'word-1');
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(controller.isClosed, isFalse);
+    await controller.dispose();
   });
 
   test(
@@ -301,7 +450,7 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
 
-      final audioSource = AudioSource.asset('missing-audio.mp3');
+      final audioSource = just_audio.AudioSource.asset('missing-audio.mp3');
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -686,6 +835,32 @@ void main() {
       );
     });
 
+    test('parses ELAN transcription and linked translation timings', () {
+      final document = ReadAlongDocument.fromXml(_elanXml);
+      final firstParagraph = document.pages.single.paragraphs.first;
+      final transcription = firstParagraph.sentences.first;
+      final translation = firstParagraph.sentences.last;
+      final timedSentence = transcription.segments.single as ReadAlongWord;
+
+      expect(document.pages, hasLength(1));
+      expect(document.pages.single.imageUrl, isNull);
+      expect(document.metadata['author'], 'Test author');
+      expect(transcription.id, 'utterance-1');
+      expect(timedSentence.id, 'utterance-1');
+      expect(timedSentence.text, 'Hēsci! Hiyowat.');
+      expect(timedSentence.start, const Duration(milliseconds: 1250));
+      expect(timedSentence.duration, const Duration(milliseconds: 2000));
+      expect(translation.isTranslation, isTrue);
+      expect(translation.segments.single.text, 'Hello! Again today.');
+      expect(document.pages.single.paragraphs, hasLength(2));
+      expect(
+        (document.pages.single.paragraphs.last.sentences.first.segments.single
+                as ReadAlongWord)
+            .start,
+        const Duration(milliseconds: 3250),
+      );
+    });
+
     test('rejects XML without readalong pages', () {
       expect(
         () => ReadAlongDocument.fromXml('<read-along><text /></read-along>'),
@@ -896,19 +1071,20 @@ class _ReplayManager extends Manager {
   }
 }
 
-class _CompletedReplayAudioPlayer extends AudioPlayer {
+class _CompletedReplayAudioPlayer extends just_audio.AudioPlayer {
   _CompletedReplayAudioPlayer() : super(handleInterruptions: false);
 
-  final StreamController<PlayerState> _playerStates =
-      StreamController<PlayerState>.broadcast(sync: true);
+  final StreamController<just_audio.PlayerState> _playerStates =
+      StreamController<just_audio.PlayerState>.broadcast(sync: true);
   final StreamController<Duration> _positions =
       StreamController<Duration>.broadcast(sync: true);
   final List<String> commands = [];
   bool _isPlaying = false;
-  ProcessingState _processingState = ProcessingState.idle;
+  just_audio.ProcessingState _processingState =
+      just_audio.ProcessingState.idle;
 
   @override
-  Stream<PlayerState> get playerStateStream => _playerStates.stream;
+  Stream<just_audio.PlayerState> get playerStateStream => _playerStates.stream;
 
   @override
   Stream<Duration> get positionStream => _positions.stream;
@@ -918,25 +1094,26 @@ class _CompletedReplayAudioPlayer extends AudioPlayer {
 
   void complete() {
     _isPlaying = true;
-    _processingState = ProcessingState.completed;
-    _playerStates.add(PlayerState(_isPlaying, _processingState));
+    _processingState = just_audio.ProcessingState.completed;
+    _playerStates.add(just_audio.PlayerState(_isPlaying, _processingState));
   }
 
   @override
   Future<void> pause() async {
     commands.add('pause');
     _isPlaying = false;
-    _playerStates.add(PlayerState(_isPlaying, _processingState));
+    _playerStates.add(just_audio.PlayerState(_isPlaying, _processingState));
   }
 
   @override
   Future<void> seek(Duration? position, {int? index}) async {
     commands.add('seek');
-    if (!_isPlaying && _processingState == ProcessingState.completed) {
-      _processingState = ProcessingState.ready;
+    if (!_isPlaying &&
+        _processingState == just_audio.ProcessingState.completed) {
+      _processingState = just_audio.ProcessingState.ready;
     }
     _positions.add(position ?? Duration.zero);
-    _playerStates.add(PlayerState(_isPlaying, _processingState));
+    _playerStates.add(just_audio.PlayerState(_isPlaying, _processingState));
   }
 
   @override
@@ -944,11 +1121,97 @@ class _CompletedReplayAudioPlayer extends AudioPlayer {
     commands.add('play');
     if (_isPlaying) return;
     _isPlaying = true;
-    _playerStates.add(PlayerState(_isPlaying, _processingState));
+    _playerStates.add(just_audio.PlayerState(_isPlaying, _processingState));
   }
 
   Future<void> close() async {
     await _playerStates.close();
     await _positions.close();
+  }
+}
+
+class _TestPlaybackController implements PlaybackController {
+  _TestPlaybackController({Duration initialPosition = Duration.zero})
+      : _position = initialPosition;
+
+  final StreamController<Duration> _positions =
+      StreamController<Duration>.broadcast(sync: true);
+  final StreamController<Duration?> _durations =
+      StreamController<Duration?>.broadcast(sync: true);
+  final StreamController<PlayerState> _states =
+      StreamController<PlayerState>.broadcast(sync: true);
+  final List<Duration> seekPositions = [];
+
+  Duration _position = Duration.zero;
+  final Duration _duration = const Duration(seconds: 2);
+  PlayerState _state = PlayerState(false, ProcessingState.ready);
+  int playCount = 0;
+  int pauseCount = 0;
+
+  bool get isClosed =>
+      _positions.isClosed || _durations.isClosed || _states.isClosed;
+
+  @override
+  Duration get position => _position;
+
+  @override
+  Duration get duration => _duration;
+
+  @override
+  double get speed => 1;
+
+  @override
+  PlayerState get state => _state;
+
+  @override
+  Stream<Duration> get positionStream => _positions.stream;
+
+  @override
+  Stream<Duration?> get durationStream => _durations.stream;
+
+  @override
+  Stream<PlayerState> get stateStream => _states.stream;
+
+  void emitState(PlayerState state) {
+    _state = state;
+    _states.add(state);
+  }
+
+  void emitPosition(Duration position) {
+    _position = position;
+    _positions.add(position);
+  }
+
+  @override
+  Future<void> play() async {
+    playCount++;
+    emitState(PlayerState(true, ProcessingState.ready));
+  }
+
+  @override
+  Future<void> pause() async {
+    pauseCount++;
+    emitState(PlayerState(false, ProcessingState.ready));
+  }
+
+  @override
+  Future<void> stop() async {
+    await pause();
+    await seek(Duration.zero);
+  }
+
+  @override
+  Future<void> seek(Duration position) async {
+    seekPositions.add(position);
+    emitPosition(position);
+  }
+
+  @override
+  Future<void> setSpeed(double speed) async {}
+
+  Future<void> dispose() async {
+    await _positions.close();
+    await _durations.close();
+    await _states.close();
   }
 }

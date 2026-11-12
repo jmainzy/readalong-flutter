@@ -50,6 +50,7 @@ class _ReaderPageState extends State<ReaderPage> {
   ImageStreamListener? _imageStreamListener;
   double _imageAspectRatio = 1;
   String? _lastActiveWordId;
+  bool _hasRestoredScroll = false;
 
   @override
   void initState() {
@@ -59,7 +60,10 @@ class _ReaderPageState extends State<ReaderPage> {
     _textScrollController.addListener(_reportTextScrollOffset);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _reportTextScrollOffset();
-      _scrollToActiveSentence();
+      if (widget.manager.position > Duration.zero) {
+        _hasRestoredScroll = true;
+        _scrollToActiveSentence(force: true);
+      }
     });
   }
 
@@ -84,11 +88,15 @@ class _ReaderPageState extends State<ReaderPage> {
     }
     if (oldWidget.page.id != widget.page.id) {
       _sentenceKeys.clear();
+      _hasRestoredScroll = false;
       if (_textScrollController.hasClients) _textScrollController.jumpTo(0);
     }
     if (oldWidget.imageUri != widget.imageUri) {
       _resolveImageDimensions();
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scrollToActiveSentence(force: true);
+    });
   }
 
   @override
@@ -142,10 +150,19 @@ class _ReaderPageState extends State<ReaderPage> {
 
   void _handleManagerChanged() {
     final activeWordId = widget.manager.activeWordId;
-    if (activeWordId == _lastActiveWordId) return;
-    _lastActiveWordId = activeWordId;
-    if (!mounted) return;
-    setState(() {});
+    if (activeWordId != _lastActiveWordId) {
+      _lastActiveWordId = activeWordId;
+      if (mounted) setState(() {});
+    }
+
+    if (!_hasRestoredScroll && widget.manager.position > Duration.zero) {
+      _hasRestoredScroll = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollToActiveSentence(force: true);
+      });
+      return;
+    }
+
     if (activeWordId != null &&
         (widget.manager.isPlaying || widget.manager.isSeeking)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -154,13 +171,39 @@ class _ReaderPageState extends State<ReaderPage> {
     }
   }
 
-  void _scrollToActiveSentence() {
-    final activeWordId = widget.manager.activeWordId;
-    if (activeWordId == null ||
-        (!widget.manager.isPlaying && !widget.manager.isSeeking) ||
+  ReadAlongWord? _nearestWordForPosition(Duration position) {
+    ReadAlongWord? candidate;
+    for (final paragraph in page.paragraphs) {
+      for (final sentence in paragraph.sentences) {
+        for (final segment in sentence.segments) {
+          if (segment is ReadAlongWord && segment.isAligned) {
+            final start = segment.start!;
+            final end = start + segment.duration!;
+            if (position >= start && position <= end) {
+              return segment;
+            }
+            if (start <= position) {
+              candidate = segment;
+            } else if (candidate == null) {
+              return segment;
+            }
+          }
+        }
+      }
+    }
+    return candidate;
+  }
+
+  void _scrollToActiveSentence({bool force = false}) {
+    if ((!force && !widget.manager.isPlaying && !widget.manager.isSeeking) ||
         !_textScrollController.hasClients) {
       return;
     }
+
+    final activeWordId =
+        widget.manager.activeWordId ??
+        _nearestWordForPosition(widget.manager.position)?.id;
+    if (activeWordId == null) return;
 
     final sentenceKey = _wordSentenceKeys[activeWordId];
     final sentenceRenderObject = sentenceKey?.currentContext
@@ -192,13 +235,17 @@ class _ReaderPageState extends State<ReaderPage> {
         )
         .toDouble();
     if (target == _textScrollController.offset) return;
-    unawaited(
-      _textScrollController.animateTo(
-        target,
-        duration: const Duration(milliseconds: 180),
-        curve: Curves.easeOut,
-      ),
-    );
+    if (force) {
+      _textScrollController.jumpTo(target);
+    } else {
+      unawaited(
+        _textScrollController.animateTo(
+          target,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+        ),
+      );
+    }
   }
 
   void _disposeWordRecognizers() {
@@ -289,15 +336,14 @@ class _ReaderPageState extends State<ReaderPage> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   SizedBox(
-                    width: width.isFinite ? width * 0.4 : 320,
+                    width: width.isFinite ? width * 0.5 : 320,
                     child: Center(
                       child: GestureDetector(
                         behavior: HitTestBehavior.opaque,
                         onTap: widget.onBackgroundTap,
                         child: _buildLandscapeImage(
                           context,
-                          width.isFinite ? width * 0.4 : 320,
-                          maxImageHeight,
+                          width.isFinite ? width * 0.5 : 320,
                         ),
                       ),
                     ),
@@ -323,19 +369,12 @@ class _ReaderPageState extends State<ReaderPage> {
     widget.onBackgroundTap?.call();
   }
 
-  Widget _buildLandscapeImage(
-    BuildContext context,
-    double width,
-    double height,
-  ) {
+  Widget _buildLandscapeImage(BuildContext context, double width) {
     return SizedBox(
       width: width,
-      height: height,
       child: Image.asset(
         widget.imageUri!,
-        width: width,
-        height: height,
-        fit: BoxFit.contain,
+        fit: BoxFit.fitWidth,
         errorBuilder: (context, error, stackTrace) => Center(
           child: Padding(
             padding: const EdgeInsets.all(12),

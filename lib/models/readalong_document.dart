@@ -7,6 +7,7 @@ class ReadAlongDocument {
   final List<ReadAlongPage> pages;
   final Map<String, String> metadata;
 
+  /// Parses a ReadAlong XML or ELAN EAF document.
   factory ReadAlongDocument.fromXml(String xmlString) {
     final parser = ReadalongParser();
     return parser.parseXml(xmlString);
