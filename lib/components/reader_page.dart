@@ -334,8 +334,7 @@ class _ReaderPageState extends State<ReaderPage> {
       child: Image.asset(
         widget.imageUri!,
         width: width,
-        height: height,
-        fit: BoxFit.contain,
+        fit: BoxFit.fitHeight,
         errorBuilder: (context, error, stackTrace) => Center(
           child: Padding(
             padding: const EdgeInsets.all(12),

@@ -2,9 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:just_audio/just_audio.dart';
+import 'package:just_audio/just_audio.dart' hide PlayerState, ProcessingState;
 
 import 'models/readalong_document.dart';
+import 'models/playback_controller.dart';
 import 'parser.dart';
 
 enum ButtonState { playingLoading, pausedLoading, completed, paused, playing }
@@ -15,25 +16,32 @@ class Manager extends ChangeNotifier {
     required String? xml,
     required String? xmlAsset,
     required AudioSource? audioSource,
+    PlaybackController? playbackController,
     ReadalongParser? parser,
     AudioPlayer? audioPlayer,
     this.imagesFolder,
   }) : assert((xml == null) != (xmlAsset == null)),
+       assert(playbackController == null || audioSource == null),
        _xml = xml,
        _xmlAsset = xmlAsset,
-       _audioSource = audioSource, // ignore: prefer_initializing_formals
-       _parser = parser ?? ReadalongParser(),
-       _ownsAudioPlayer = audioPlayer == null,
-       _player = audioPlayer ?? AudioPlayer();
+       _audioSource = audioSource,
+       _parser = parser ?? ReadalongParser() {
+    _player = audioPlayer ?? AudioPlayer();
+    _ownsAudioPlayer = audioPlayer == null;
+    _playbackController =
+        playbackController ?? _JustAudioPlaybackController(_player);
+  }
 
   String? _xml;
   String? _xmlAsset;
   AudioSource? _audioSource;
   final ReadalongParser _parser;
-  final bool _ownsAudioPlayer;
-  final AudioPlayer _player;
+  late final bool _ownsAudioPlayer;
+  late final AudioPlayer _player;
+  late PlaybackController _playbackController;
   final String? imagesFolder;
   StreamSubscription<Duration>? _positionSubscription;
+  StreamSubscription<Duration?>? _durationSubscription;
   StreamSubscription<PlayerState>? _playerStateSubscription;
 
   ReadAlongDocument? _document;
@@ -43,9 +51,6 @@ class Manager extends ChangeNotifier {
   Duration? _seekPreviewPosition;
   Duration? _duration;
   String? _activeWordId;
-  bool _isAudioLoading = false;
-  bool _isPlaying = false;
-  bool _isCompleted = false;
   bool _autoplay = false;
   int? _pausedAtPageIndex;
   Duration? _wordPlaybackEnd;
@@ -65,10 +70,13 @@ class Manager extends ChangeNotifier {
   Duration get displayPosition => _seekPreviewPosition ?? _position;
   Duration? get duration => _duration;
   String? get activeWordId => _activeWordId;
-  bool get isAudioLoading => _isAudioLoading;
-  bool get isPlaying => _isPlaying;
+  bool get isAudioLoading =>
+      _playbackController.state.processingState == ProcessingState.loading ||
+      _playbackController.state.processingState == ProcessingState.buffering;
+  bool get isPlaying => _playbackController.state.playing;
   bool get isSeeking => _isSeeking;
-  bool get isCompleted => _isCompleted;
+  bool get isCompleted =>
+      _playbackController.state.processingState == ProcessingState.completed;
   bool get autoplay => !_autoplay;
   double get speed => _speed;
   ValueListenable<ButtonState> get buttonState => _buttonState;
@@ -79,14 +87,7 @@ class Manager extends ChangeNotifier {
   int _documentConfiguration = 0;
 
   Future<void> initialize() async {
-    _positionSubscription = _player.positionStream.listen(
-      _updatePosition,
-      onError: _handleAudioError,
-    );
-    _playerStateSubscription = _player.playerStateStream.listen(
-      _updatePlayerState,
-      onError: _handleAudioError,
-    );
+    _bindPlaybackController();
     await Future.wait([_loadDocument(), _configureAudio()]);
   }
 
@@ -95,12 +96,20 @@ class Manager extends ChangeNotifier {
     required String? xml,
     required String? xmlAsset,
     required AudioSource? audioSource,
+    required PlaybackController? playbackController,
   }) async {
     final documentChanged = _xml != xml || _xmlAsset != xmlAsset;
-    final audioChanged = _audioSource != audioSource;
+    final controllerChanged = _playbackController != playbackController;
+    final audioChanged = _audioSource != audioSource || controllerChanged;
     _xml = xml;
     _xmlAsset = xmlAsset;
     _audioSource = audioSource;
+    if (controllerChanged) {
+      _playbackController =
+          playbackController ?? _JustAudioPlaybackController(_player);
+      await _cancelPlaybackSubscriptions();
+      _bindPlaybackController();
+    }
 
     final updates = <Future<void>>[];
     if (documentChanged) updates.add(_loadDocument());
@@ -134,34 +143,37 @@ class Manager extends ChangeNotifier {
     _clearWordPlaybackEnd();
     final source = _audioSource;
     _audioError = null;
+    _hasConfiguredAudio = true;
+    _duration = _playbackController.duration;
+    _position = _playbackController.position;
+    _updatePlaybackState(_playbackController.state);
+    _updateActiveWord(_position);
+    notifyListeners();
 
     if (source == null) {
       Object? stopError;
       if (_hasConfiguredAudio) {
         try {
-          await _player.stop();
+          await _playbackController.stop();
         } catch (error) {
           stopError = error;
         }
       }
+
       if (_disposed || configuration != _audioConfiguration) return;
       _hasConfiguredAudio = false;
       _audioError = stopError;
-      _isAudioLoading = false;
-      _isPlaying = false;
-      _isCompleted = false;
       _duration = null;
       _position = Duration.zero;
       _activeWordId = null;
-      _setPlayerState(ButtonState.paused);
+      _setPlayButtonState(ButtonState.paused);
       notifyListeners();
       return;
     }
 
-    _isAudioLoading = true;
     _duration = null;
-    _setPlayerState(
-      _isPlaying ? ButtonState.playingLoading : ButtonState.pausedLoading,
+    _setPlayButtonState(
+      isPlaying ? ButtonState.playingLoading : ButtonState.pausedLoading,
     );
     notifyListeners();
     try {
@@ -170,51 +182,77 @@ class Manager extends ChangeNotifier {
       _hasConfiguredAudio = true;
       _duration = loadedDuration;
       _position = Duration.zero;
-      _isAudioLoading = false;
-      _isCompleted = false;
-      _setPlayerState(ButtonState.paused);
+      _setPlayButtonState(ButtonState.paused);
       _updateActiveWord(_position);
       notifyListeners();
     } catch (error) {
       if (_disposed || configuration != _audioConfiguration) return;
       _audioError = error;
-      _isAudioLoading = false;
-      _setPlayerState(ButtonState.paused);
+      _setPlayButtonState(ButtonState.paused);
       notifyListeners();
     }
   }
 
-  void _updatePlayerState(PlayerState state) {
+  void _updatePlaybackState(PlayerState state) {
     if (_disposed) return;
-    _isAudioLoading =
+    final isLoading =
         state.processingState == ProcessingState.loading ||
         state.processingState == ProcessingState.buffering;
-    _isPlaying = state.playing;
-    _isCompleted = state.processingState == ProcessingState.completed;
-    _setPlayerState(_toReadAlongPlayerState(state));
-    if (_isCompleted && _duration != null) {
+    _setPlayButtonState(
+      _isSeeking
+          ? ButtonState.paused
+          : isLoading
+          ? (state.playing
+                ? ButtonState.playingLoading
+                : ButtonState.pausedLoading)
+          : state.processingState == ProcessingState.completed
+          ? ButtonState.completed
+          : state.playing
+          ? ButtonState.playing
+          : ButtonState.paused,
+    );
+    if (state.processingState == ProcessingState.completed &&
+        _duration != null) {
       _position = _duration!;
       _updateActiveWord(_position);
     }
-    _speed = _player.speed;
+    _speed = _playbackController.speed;
     notifyListeners();
   }
 
-  ButtonState _toReadAlongPlayerState(PlayerState state) {
-    if (_isSeeking) return ButtonState.paused;
-    if (state.processingState == ProcessingState.loading ||
-        state.processingState == ProcessingState.buffering) {
-      return state.playing
-          ? ButtonState.playingLoading
-          : ButtonState.pausedLoading;
-    }
-    if (state.processingState == ProcessingState.completed) {
-      return ButtonState.completed;
-    }
-    return state.playing ? ButtonState.playing : ButtonState.paused;
+  void _updateDuration(Duration? duration) {
+    if (_disposed) return;
+    _duration = duration;
+    if (duration != null && _position > duration) _position = duration;
+    _updateActiveWord(_position);
+    notifyListeners();
   }
 
-  void _setPlayerState(ButtonState state) {
+  void _bindPlaybackController() {
+    _positionSubscription = _playbackController.positionStream.listen(
+      _updatePosition,
+      onError: _handleAudioError,
+    );
+    _durationSubscription = _playbackController.durationStream.listen(
+      _updateDuration,
+      onError: _handleAudioError,
+    );
+    _playerStateSubscription = _playbackController.stateStream.listen(
+      _updatePlaybackState,
+      onError: _handleAudioError,
+    );
+  }
+
+  Future<void> _cancelPlaybackSubscriptions() async {
+    await _positionSubscription?.cancel();
+    await _durationSubscription?.cancel();
+    await _playerStateSubscription?.cancel();
+    _positionSubscription = null;
+    _durationSubscription = null;
+    _playerStateSubscription = null;
+  }
+
+  void _setPlayButtonState(ButtonState state) {
     if (!_disposed && _buttonState.value != state) {
       _buttonState.value = state;
     }
@@ -245,7 +283,7 @@ class Manager extends ChangeNotifier {
 
   bool _pauseAtPageEnd(Duration previousPosition, Duration position) {
     if (_pausedAtPageIndex != null) return true;
-    if (!_autoplay || !_isPlaying || _wordPlaybackEnd != null) {
+    if (!_autoplay || !isPlaying || _wordPlaybackEnd != null) {
       return false;
     }
 
@@ -343,9 +381,9 @@ class Manager extends ChangeNotifier {
 
   Future<void> _finishPagePlayback(Duration end, int generation) async {
     try {
-      await _player.pause();
+      await _playbackController.pause();
       if (_disposed || generation != _wordPlaybackGeneration) return;
-      await _player.seek(end);
+      await _playbackController.seek(end);
       if (_disposed || generation != _wordPlaybackGeneration) return;
       _position = end;
       final pageIndex = _pausedAtPageIndex;
@@ -378,9 +416,9 @@ class Manager extends ChangeNotifier {
 
   Future<void> _finishWordPlayback(Duration end, int generation) async {
     try {
-      await _player.pause();
+      await _playbackController.pause();
       if (_disposed || generation != _wordPlaybackGeneration) return;
-      await _player.seek(end);
+      await _playbackController.seek(end);
       if (_disposed || generation != _wordPlaybackGeneration) return;
       _position = end;
       _updateActiveWord(end);
@@ -424,12 +462,13 @@ class Manager extends ChangeNotifier {
   void _handleAudioError(Object error, [StackTrace? stackTrace]) {
     if (_disposed) return;
     _audioError = error;
-    _isAudioLoading = false;
     notifyListeners();
   }
 
   Future<void> play() async {
-    if (_audioSource == null || _isAudioLoading) return;
+    if ((_audioSource == null) || isAudioLoading) {
+      return;
+    }
     final pausedPageIndex = _pausedAtPageIndex;
     _pausedAtPageIndex = null;
     _clearWordPlaybackEnd();
@@ -439,15 +478,15 @@ class Manager extends ChangeNotifier {
         final nextPage = _nextAlignedPage(pausedPageIndex);
         if (nextPage != null) {
           final nextPageStart = nextPage.start!;
-          await _player.seek(nextPageStart);
+          await _playbackController.seek(nextPageStart);
           _position = nextPageStart;
           _updateActiveWord(_position);
         }
-      } else if (_isCompleted ||
+      } else if (isCompleted ||
           (_duration != null && _position >= _duration!)) {
-        await _player.seek(Duration.zero);
+        await _playbackController.seek(Duration.zero);
       }
-      await _player.play();
+      await _playbackController.play();
     } catch (error) {
       _handleAudioError(error);
     }
@@ -457,7 +496,7 @@ class Manager extends ChangeNotifier {
     _clearWordPlaybackEnd();
     _updateActiveWord(_position);
     try {
-      await _player.pause();
+      await _playbackController.pause();
     } catch (error) {
       _handleAudioError(error);
     }
@@ -466,7 +505,7 @@ class Manager extends ChangeNotifier {
   Future<void> stop() async {
     _clearWordPlaybackEnd();
     try {
-      await _player.stop();
+      await _playbackController.stop();
       _position = Duration.zero;
       _updateActiveWord(_position);
       notifyListeners();
@@ -480,12 +519,11 @@ class Manager extends ChangeNotifier {
     _clearWordPlaybackEnd();
     _updateActiveWord(Duration.zero);
     try {
-      await _player.pause();
-      await _player.seek(Duration.zero);
+      await _playbackController.pause();
+      await _playbackController.seek(Duration.zero);
       _position = Duration.zero;
-      _isCompleted = false;
       _updateActiveWord(_position);
-      await _player.play();
+      await _playbackController.play();
     } catch (error) {
       _handleAudioError(error);
     }
@@ -498,10 +536,10 @@ class Manager extends ChangeNotifier {
     _clearWordPlaybackEnd();
     _pausedAtPageIndex = null;
     notifyListeners();
-    if (!_isPlaying) return;
+    if (!isPlaying) return;
 
     try {
-      await _player.pause();
+      await _playbackController.pause();
     } catch (error) {
       _isSeeking = false;
       _seekPreviewPosition = null;
@@ -523,7 +561,7 @@ class Manager extends ChangeNotifier {
     _seekPreviewPosition = target;
     _updateActiveWord(target);
     try {
-      await _player.seek(target);
+      await _playbackController.seek(target);
       _position = target;
       _isSeeking = false;
       _seekPreviewPosition = null;
@@ -538,12 +576,12 @@ class Manager extends ChangeNotifier {
   }
 
   Future<void> seek(Duration target) async {
-    if (_isAudioLoading) return;
+    if (isAudioLoading) return;
     _pausedAtPageIndex = null;
     _clearWordPlaybackEnd();
     _updateActiveWord(target);
     try {
-      await _player.seek(target);
+      await _playbackController.seek(target);
     } catch (error) {
       _handleAudioError(error);
     }
@@ -554,26 +592,27 @@ class Manager extends ChangeNotifier {
   }
 
   Future<void> playWord(ReadAlongWord word) async {
-    if (!word.isAligned || _audioSource == null || _isAudioLoading) return;
+    if (!word.isAligned || (_audioSource == null) || isAudioLoading) {
+      return;
+    }
     // A word tap while playing seeks playback without turning it into a
     // one-word preview; from pause, playback is bounded to the selected word.
-    final continuePlayback = _isPlaying;
     _pausedAtPageIndex = null;
     _clearWordPlaybackEnd();
     final generation = _wordPlaybackGeneration;
     final end = word.start! + word.duration!;
-    if (!continuePlayback) {
+    if (!isPlaying) {
       _wordPlaybackHighlightId = word.id;
       _wordPlaybackEnd = end;
     }
     _activeWordId = word.id;
     notifyListeners();
     try {
-      await _player.seek(word.start);
+      await _playbackController.seek(word.start!);
       if (_disposed || generation != _wordPlaybackGeneration) return;
       _position = word.start!;
       _updateActiveWord(_position);
-      await _player.play();
+      await _playbackController.play();
     } catch (error) {
       if (generation == _wordPlaybackGeneration) {
         _clearWordPlaybackEnd();
@@ -618,8 +657,8 @@ class Manager extends ChangeNotifier {
 
   Future<void> setSpeed(double value) async {
     try {
-      await _player.setSpeed(value);
-      _speed = _player.speed;
+      await _playbackController.setSpeed(value);
+      _speed = _playbackController.speed;
       notifyListeners();
     } catch (error) {
       _handleAudioError(error);
@@ -629,10 +668,52 @@ class Manager extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    unawaited(_positionSubscription?.cancel());
-    unawaited(_playerStateSubscription?.cancel());
+    unawaited(_cancelPlaybackSubscriptions());
     _buttonState.dispose();
     if (_ownsAudioPlayer) unawaited(_player.dispose());
     super.dispose();
   }
+}
+
+class _JustAudioPlaybackController implements PlaybackController {
+  _JustAudioPlaybackController(this._player);
+
+  final AudioPlayer _player;
+
+  @override
+  Duration get position => _player.position;
+
+  @override
+  Duration? get duration => _player.duration;
+
+  @override
+  double get speed => _player.speed;
+
+  @override
+  PlayerState get state => PlayerState.fromJustAudio(_player.playerState);
+
+  @override
+  Stream<Duration> get positionStream => _player.positionStream;
+
+  @override
+  Stream<Duration?> get durationStream => _player.durationStream;
+
+  @override
+  Stream<PlayerState> get stateStream =>
+      _player.playerStateStream.map(PlayerState.fromJustAudio);
+
+  @override
+  Future<void> play() => _player.play();
+
+  @override
+  Future<void> pause() => _player.pause();
+
+  @override
+  Future<void> stop() => _player.stop();
+
+  @override
+  Future<void> seek(Duration position) => _player.seek(position);
+
+  @override
+  Future<void> setSpeed(double speed) => _player.setSpeed(speed);
 }

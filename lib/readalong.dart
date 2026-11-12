@@ -7,11 +7,13 @@ import 'package:just_audio/just_audio.dart';
 import 'package:readalong/components/reader_page.dart';
 import 'package:readalong/models/readalong_document.dart';
 import 'package:readalong/models/readalong_position.dart';
+import 'package:readalong/models/playback_controller.dart';
 
 import 'components/audio_widget.dart';
 import 'manager.dart';
 
 export 'manager.dart';
+export 'models/playback_controller.dart';
 export 'models/readalong_position.dart';
 
 /// Displays a ReadAlong XML or ELAN EAF document with aligned audio playback.
@@ -33,6 +35,7 @@ class ReadAlong extends StatefulWidget {
     this.xmlAsset,
     this.imagesFolder,
     this.audioSource,
+    this.playbackController,
     this.audioTitle,
     this.onAutoplayChanged,
     this.onSpeedChanged,
@@ -42,7 +45,8 @@ class ReadAlong extends StatefulWidget {
     this.textStyle,
     this.translationTextStyle,
     this.highlightColor,
-  }) : assert((xml == null) != (xmlAsset == null));
+  }) : assert((xml == null) != (xmlAsset == null)),
+       assert(audioSource == null || playbackController == null);
 
   /// XML contents of a `.readalong` or ELAN `.eaf` document.
   final String? xml;
@@ -61,6 +65,14 @@ class ReadAlong extends StatefulWidget {
   /// Use `AudioSource.asset(...)`, `AudioSource.uri(...)`, or another
   /// `AudioSource` supported by `just_audio`.
   final AudioSource? audioSource;
+
+  /// Optional external player synchronized with the reader text.
+  ///
+  /// Use this instead of [audioSource] when playback is owned by a player
+  /// outside this package. The reader's audio widget is hidden so the external
+  /// player provides the playback controls. The controller remains owned by
+  /// the caller.
+  final PlaybackController? playbackController;
 
   /// Optional title shown above the audio controls, such as a speaker name.
   final String? audioTitle;
@@ -119,6 +131,7 @@ class _ReadAlongState extends State<ReadAlong> {
       xml: widget.xml,
       xmlAsset: widget.xmlAsset,
       audioSource: widget.audioSource,
+      playbackController: widget.playbackController,
       imagesFolder: widget.imagesFolder,
     );
     _manager.addListener(_followActiveWord);
@@ -149,7 +162,8 @@ class _ReadAlongState extends State<ReadAlong> {
     }
     if (oldWidget.xml != widget.xml ||
         oldWidget.xmlAsset != widget.xmlAsset ||
-        oldWidget.audioSource != widget.audioSource) {
+        oldWidget.audioSource != widget.audioSource ||
+        oldWidget.playbackController != widget.playbackController) {
       _currentPageIndex = 0;
       _requestedPageIndex = null;
       _lastFollowedWordId = null;
@@ -159,6 +173,7 @@ class _ReadAlongState extends State<ReadAlong> {
           xml: widget.xml,
           xmlAsset: widget.xmlAsset,
           audioSource: widget.audioSource,
+          playbackController: widget.playbackController,
         ),
       );
     }
@@ -229,7 +244,9 @@ class _ReadAlongState extends State<ReadAlong> {
                     key: ValueKey(page.id),
                     page: page,
                     manager: _manager,
-                    audioEnabled: widget.audioSource != null,
+                    audioEnabled:
+                        widget.audioSource != null ||
+                        widget.playbackController != null,
                     audioError: _manager.audioError,
                     translationTextStyle: widget.translationTextStyle,
                     textStyle: widget.textStyle,
@@ -274,8 +291,14 @@ class _ReadAlongState extends State<ReadAlong> {
     final page = document.pages[pageIndex];
     final position = ReadAlongPosition(
       pageIndex: pageIndex,
-      audioPosition: widget.audioSource == null ? null : _manager.position,
-      activeWordId: widget.audioSource == null ? null : _manager.activeWordId,
+      audioPosition:
+          widget.audioSource == null && widget.playbackController == null
+          ? null
+          : _manager.position,
+      activeWordId:
+          widget.audioSource == null && widget.playbackController == null
+          ? null
+          : _manager.activeWordId,
       textScrollOffset: _textScrollOffsets[page.id] ?? 0,
     );
     if (!force && position == _lastReportedPosition) return;
