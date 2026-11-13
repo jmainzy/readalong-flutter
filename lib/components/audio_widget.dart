@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:readalong/components/speed_dialog.dart';
 
-import '../manager.dart';
+import '../managers/text_manager.dart';
 
 class AudioPlayerWidget extends StatelessWidget {
   const AudioPlayerWidget({

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:readalong/manager.dart';
+import 'package:readalong/managers/text_manager.dart';
 
 class SpeedButton extends StatefulWidget {
   final Manager manager;

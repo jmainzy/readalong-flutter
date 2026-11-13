@@ -4,13 +4,13 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart' hide PlayerState, ProcessingState;
 
-import 'models/readalong_document.dart';
-import 'models/playback_controller.dart';
-import 'parser.dart';
+import '../models/readalong_document.dart';
+import '../models/playback_controller.dart';
+import '../parser.dart';
 
 enum ButtonState { playingLoading, pausedLoading, completed, paused, playing }
 
-/// Owns the ReadAlong document and audio state, and exposes playback commands.
+/// Owns the ReadAlong text manipulation.
 class Manager extends ChangeNotifier {
   Manager({
     required String? xml,
@@ -55,6 +55,7 @@ class Manager extends ChangeNotifier {
   String? _activeWordId;
   bool _autoplay = false;
   int? _pausedAtPageIndex;
+  int? _pageToStartOnNextPlay;
   Duration? _wordPlaybackEnd;
   String? _wordPlaybackHighlightId;
   bool _isFinishingWordPlayback = false;
@@ -122,6 +123,7 @@ class Manager extends ChangeNotifier {
 
   Future<void> _loadDocument() async {
     final configuration = ++_documentConfiguration;
+    _pageToStartOnNextPlay = null;
     _clearWordPlaybackEnd();
     _document = null;
     _xmlError = null;
@@ -311,17 +313,14 @@ class Manager extends ChangeNotifier {
     Duration previousPosition,
     Duration position,
   ) {
-    final pages = _document?.pages;
-    if (pages == null) return null;
-
-    for (final (pageIndex, page) in pages.indexed) {
-      final range = _pagePlaybackRange(pageIndex, page);
-      if (range != null &&
-          previousPosition < range.end &&
-          position >= range.end) {
+    final pageRanges = _alignedPageRanges();
+    for (var index = 0; index < pageRanges.length - 1; index++) {
+      final range = pageRanges[index];
+      final boundary = _pageTurnBoundary(range, pageRanges[index + 1]);
+      if (previousPosition < boundary && position >= boundary) {
         return (
-          pageIndex: pageIndex,
-          end: range.end,
+          pageIndex: range.pageIndex,
+          end: boundary,
           wordId: range.lastWord.id,
         );
       }
@@ -353,13 +352,12 @@ class Manager extends ChangeNotifier {
     );
   }
 
-  ({int pageIndex, Duration end, String wordId})? _pageBoundaryAt(
-    Duration position,
-  ) {
+  List<({int pageIndex, Duration start, Duration end, ReadAlongWord lastWord})>
+  _alignedPageRanges() {
     final pages = _document?.pages;
-    if (pages == null) return null;
+    if (pages == null) return [];
 
-    final pageRanges =
+    final ranges =
         <
           ({
             int pageIndex,
@@ -370,18 +368,43 @@ class Manager extends ChangeNotifier {
         >[];
     for (final (pageIndex, page) in pages.indexed) {
       final range = _pagePlaybackRange(pageIndex, page);
-      if (range != null) pageRanges.add(range);
+      if (range != null) ranges.add(range);
     }
+    return ranges;
+  }
 
+  Duration _pageTurnBoundary(
+    ({int pageIndex, Duration start, Duration end, ReadAlongWord lastWord})
+    currentPage,
+    ({int pageIndex, Duration start, Duration end, ReadAlongWord lastWord})
+    nextPage,
+  ) {
+    final gap = nextPage.start - currentPage.end;
+    if (gap <= Duration.zero) return currentPage.end;
+    return currentPage.end + Duration(milliseconds: gap.inMilliseconds ~/ 2);
+  }
+
+  ({int pageIndex, Duration end, String wordId})? _pageBoundaryAt(
+    Duration position,
+  ) {
+    final pageRanges = _alignedPageRanges();
     if (pageRanges.isEmpty) return null;
-    var currentPage = pageRanges.first;
-    for (final range in pageRanges.skip(1)) {
-      if (range.start > position) break;
-      currentPage = range;
+    var currentPageIndex = 0;
+    for (var index = 0; index < pageRanges.length - 1; index++) {
+      final boundary = _pageTurnBoundary(
+        pageRanges[index],
+        pageRanges[index + 1],
+      );
+      if (position < boundary) break;
+      currentPageIndex = index + 1;
     }
+    final currentPage = pageRanges[currentPageIndex];
+    final end = currentPageIndex + 1 < pageRanges.length
+        ? _pageTurnBoundary(currentPage, pageRanges[currentPageIndex + 1])
+        : currentPage.end;
     return (
       pageIndex: currentPage.pageIndex,
-      end: currentPage.end,
+      end: end,
       wordId: currentPage.lastWord.id,
     );
   }
@@ -390,19 +413,28 @@ class Manager extends ChangeNotifier {
     final pages = _document?.pages;
     if (pages == null || pages.isEmpty) return 0;
 
-    int candidate = 0;
-    for (final (pageIndex, page) in pages.indexed) {
-      final range = _pagePlaybackRange(pageIndex, page);
-      if (range != null) {
-        if (position >= range.start) {
-          candidate = pageIndex;
-        }
-        if (position <= range.end) {
-          return pageIndex;
-        }
-      }
+    final pageRanges = _alignedPageRanges();
+    if (pageRanges.isEmpty) return 0;
+
+    for (var index = 0; index < pageRanges.length - 1; index++) {
+      final boundary = _pageTurnBoundary(
+        pageRanges[index],
+        pageRanges[index + 1],
+      );
+      if (position < boundary) return pageRanges[index].pageIndex;
     }
-    return candidate;
+    return pageRanges.last.pageIndex;
+  }
+
+  /// Starts the next paused playback request from the selected page.
+  void preparePlaybackFromPage(int pageIndex) {
+    if (isPlaying) {
+      _pageToStartOnNextPlay = null;
+      return;
+    }
+    final pageCount = _document?.pages.length ?? 0;
+    if (pageIndex < 0 || pageIndex >= pageCount) return;
+    _pageToStartOnNextPlay = pageIndex;
   }
 
   ReadAlongWord? nearestWordForPosition(Duration position) {
@@ -514,12 +546,23 @@ class Manager extends ChangeNotifier {
         isAudioLoading) {
       return;
     }
+    final pageToStart = _pageToStartOnNextPlay;
+    _pageToStartOnNextPlay = null;
     final pausedPageIndex = _pausedAtPageIndex;
     _pausedAtPageIndex = null;
     _clearWordPlaybackEnd();
     _updateActiveWord(_position);
     try {
-      if (pausedPageIndex != null) {
+      final pages = _document?.pages;
+      final pageStart =
+          pageToStart != null && pages != null && pageToStart < pages.length
+          ? _pagePlaybackRange(pageToStart, pages[pageToStart])?.start
+          : null;
+      if (pageStart != null) {
+        await _playbackController.seek(pageStart);
+        _position = pageStart;
+        _updateActiveWord(_position);
+      } else if (pausedPageIndex != null) {
         final nextPage = _nextAlignedPage(pausedPageIndex);
         if (nextPage != null) {
           final nextPageStart = nextPage.start!;
@@ -548,6 +591,7 @@ class Manager extends ChangeNotifier {
   }
 
   Future<void> stop() async {
+    _pageToStartOnNextPlay = null;
     _clearWordPlaybackEnd();
     try {
       await _playbackController.stop();
@@ -560,6 +604,7 @@ class Manager extends ChangeNotifier {
   }
 
   Future<void> replay() async {
+    _pageToStartOnNextPlay = null;
     _pausedAtPageIndex = null;
     _clearWordPlaybackEnd();
     _updateActiveWord(Duration.zero);
@@ -576,6 +621,7 @@ class Manager extends ChangeNotifier {
 
   Future<void> beginSeek() async {
     if (_isSeeking) return;
+    _pageToStartOnNextPlay = null;
     _isSeeking = true;
     _seekPreviewPosition = _position;
     _clearWordPlaybackEnd();
@@ -622,6 +668,7 @@ class Manager extends ChangeNotifier {
 
   Future<void> seek(Duration target) async {
     if (isAudioLoading) return;
+    _pageToStartOnNextPlay = null;
     _pausedAtPageIndex = null;
     _clearWordPlaybackEnd();
     _updateActiveWord(target);
@@ -642,6 +689,7 @@ class Manager extends ChangeNotifier {
         isAudioLoading) {
       return;
     }
+    _pageToStartOnNextPlay = null;
     // A word tap while playing seeks playback without turning it into a
     // one-word preview; from pause, playback is bounded to the selected word.
     _pausedAtPageIndex = null;

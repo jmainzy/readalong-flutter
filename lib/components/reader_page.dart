@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:readalong/manager.dart';
+import 'package:readalong/managers/text_manager.dart';
 import 'package:readalong/models/readalong_document.dart';
 
 class ReaderPage extends StatefulWidget {
@@ -95,7 +95,7 @@ class _ReaderPageState extends State<ReaderPage> {
       _resolveImageDimensions();
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _scrollToActiveSentence(force: true);
+      if (mounted) _scrollToActiveSentence();
     });
   }
 

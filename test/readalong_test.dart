@@ -40,6 +40,21 @@ const _translationXml = '''
 </read-along>
 ''';
 
+const _twoAlignedPageXml = '''
+<read-along>
+  <text xml:lang="eng">
+    <body>
+      <div type="page" id="page-1">
+        <p><s id="sentence-1"><w id="word-1" time="0" dur="1">First page.</w></s></p>
+      </div>
+      <div type="page" id="page-2">
+        <p><s id="sentence-2"><w id="word-2" time="5" dur="1">Second page.</w></s></p>
+      </div>
+    </body>
+  </text>
+</read-along>
+''';
+
 const _elanXml = '''
 <ANNOTATION_DOCUMENT AUTHOR="Test author" DATE="2026-01-01">
   <HEADER TIME_UNITS="milliseconds">
@@ -174,22 +189,60 @@ void main() {
     await controller.dispose();
   });
 
-  test('external playback controller restores initial position and active word', () async {
-    final controller = _TestPlaybackController(
-      initialPosition: const Duration(milliseconds: 800),
-    );
-    final manager = Manager(
-      xml: _sampleXml,
-      xmlAsset: null,
-      audioSource: null,
-      playbackController: controller,
-    );
-    addTearDown(manager.dispose);
+  test(
+    'autoplay pauses and turns page halfway through the inter-page gap',
+    () async {
+      final controller = _TestPlaybackController();
+      final manager = Manager(
+        xml: _twoAlignedPageXml,
+        xmlAsset: null,
+        audioSource: null,
+        playbackController: controller,
+      );
+      addTearDown(manager.dispose);
+      addTearDown(controller.dispose);
+      await manager.initialize();
 
-    await manager.initialize();
-    expect(manager.position, const Duration(milliseconds: 800));
-    expect(manager.activeWordId, 'word-2');
-  });
+      expect(
+        manager.pageIndexForPosition(const Duration(milliseconds: 2999)),
+        0,
+      );
+      expect(manager.pageIndexForPosition(const Duration(seconds: 3)), 1);
+
+      manager.togglePagePlaybackMode();
+      await manager.play();
+      controller.emitPosition(const Duration(seconds: 2));
+      expect(manager.isPlaying, isTrue);
+      expect(controller.pauseCount, 0);
+
+      controller.emitPosition(const Duration(seconds: 3));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(manager.isPlaying, isFalse);
+      expect(manager.position, const Duration(seconds: 3));
+      expect(controller.seekPositions, [const Duration(seconds: 3)]);
+    },
+  );
+
+  test(
+    'external playback controller restores initial position and active word',
+    () async {
+      final controller = _TestPlaybackController(
+        initialPosition: const Duration(milliseconds: 800),
+      );
+      final manager = Manager(
+        xml: _sampleXml,
+        xmlAsset: null,
+        audioSource: null,
+        playbackController: controller,
+      );
+      addTearDown(manager.dispose);
+
+      await manager.initialize();
+      expect(manager.position, const Duration(milliseconds: 800));
+      expect(manager.activeWordId, 'word-2');
+    },
+  );
 
   test('external playback state mirrors JustAudio state transitions', () async {
     final controller = _TestPlaybackController();
@@ -257,6 +310,125 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     expect(controller.isClosed, isFalse);
     await controller.dispose();
+  });
+
+  testWidgets(
+    'swiping back to the first page is not overridden by playback position',
+    (tester) async {
+      final controller = _TestPlaybackController(
+        initialPosition: const Duration(seconds: 5),
+      );
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SizedBox(
+            height: 500,
+            child: ReadAlong(
+              xml: _twoAlignedPageXml,
+              playbackController: controller,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final pageController = tester
+          .widget<PageView>(find.byType(PageView))
+          .controller!;
+      expect(pageController.page, closeTo(1, 0.01));
+
+      await tester.drag(find.byType(PageView), const Offset(500, 0));
+      await tester.pumpAndSettle();
+
+      expect(pageController.page, closeTo(0, 0.01));
+    },
+  );
+
+  testWidgets('scrubbing follows the highlighted word across pages', (
+    tester,
+  ) async {
+    final controller = _TestPlaybackController(
+      duration: const Duration(seconds: 10),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: 500,
+          child: ReadAlong(
+            xml: _twoAlignedPageXml,
+            playbackController: controller,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final manager = tester.widget<ReaderPage>(find.byType(ReaderPage)).manager;
+    final pageController = tester
+        .widget<PageView>(find.byType(PageView))
+        .controller!;
+    await manager.beginSeek();
+    manager.updateSeekPreviewMilliseconds(5000);
+    await tester.pumpAndSettle();
+
+    expect(manager.activeWordId, 'word-2');
+    expect(pageController.page, closeTo(1, 0.01));
+
+    manager.updateSeekPreviewMilliseconds(0);
+    await tester.pumpAndSettle();
+
+    expect(manager.activeWordId, 'word-1');
+    expect(pageController.page, closeTo(0, 0.01));
+  });
+
+  testWidgets('playing after swiping starts at the selected page', (
+    tester,
+  ) async {
+    final controller = _TestPlaybackController(
+      duration: const Duration(seconds: 10),
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: 500,
+          child: ReadAlong(
+            xml: _twoAlignedPageXml,
+            playbackController: controller,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final manager = tester
+        .widgetList<ReaderPage>(find.byType(ReaderPage))
+        .first
+        .manager;
+    final pageView = find.byType(PageView);
+
+    await tester.drag(pageView, const Offset(-500, 0));
+    await tester.pumpAndSettle();
+    await manager.play();
+    await tester.pumpAndSettle();
+
+    expect(controller.seekPositions, [const Duration(seconds: 5)]);
+
+    await manager.pause();
+    await tester.pumpAndSettle();
+    await tester.drag(pageView, const Offset(500, 0));
+    await tester.pumpAndSettle();
+    await manager.play();
+    await tester.pumpAndSettle();
+
+    expect(controller.seekPositions, [
+      const Duration(seconds: 5),
+      Duration.zero,
+    ]);
   });
 
   test(
@@ -1080,8 +1252,7 @@ class _CompletedReplayAudioPlayer extends just_audio.AudioPlayer {
       StreamController<Duration>.broadcast(sync: true);
   final List<String> commands = [];
   bool _isPlaying = false;
-  just_audio.ProcessingState _processingState =
-      just_audio.ProcessingState.idle;
+  just_audio.ProcessingState _processingState = just_audio.ProcessingState.idle;
 
   @override
   Stream<just_audio.PlayerState> get playerStateStream => _playerStates.stream;
@@ -1131,8 +1302,10 @@ class _CompletedReplayAudioPlayer extends just_audio.AudioPlayer {
 }
 
 class _TestPlaybackController implements PlaybackController {
-  _TestPlaybackController({Duration initialPosition = Duration.zero})
-      : _position = initialPosition;
+  _TestPlaybackController({
+    Duration initialPosition = Duration.zero,
+    this.duration = const Duration(seconds: 2),
+  }) : _position = initialPosition;
 
   final StreamController<Duration> _positions =
       StreamController<Duration>.broadcast(sync: true);
@@ -1143,7 +1316,8 @@ class _TestPlaybackController implements PlaybackController {
   final List<Duration> seekPositions = [];
 
   Duration _position = Duration.zero;
-  final Duration _duration = const Duration(seconds: 2);
+  @override
+  final Duration duration;
   PlayerState _state = PlayerState(false, ProcessingState.ready);
   int playCount = 0;
   int pauseCount = 0;
@@ -1153,9 +1327,6 @@ class _TestPlaybackController implements PlaybackController {
 
   @override
   Duration get position => _position;
-
-  @override
-  Duration get duration => _duration;
 
   @override
   double get speed => 1;

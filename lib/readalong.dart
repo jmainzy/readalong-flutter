@@ -9,9 +9,9 @@ import 'package:readalong/models/readalong_position.dart';
 import 'package:readalong/models/playback_controller.dart';
 
 import 'components/audio_widget.dart';
-import 'manager.dart';
+import 'managers/text_manager.dart';
 
-export 'manager.dart';
+export 'managers/text_manager.dart';
 export 'models/playback_controller.dart';
 export 'models/readalong_position.dart';
 
@@ -218,10 +218,6 @@ class _ReadAlongState extends State<ReadAlong> {
           return const Center(child: CircularProgressIndicator());
         }
 
-        final targetPage = _manager.pageIndexForPosition(_manager.position);
-        if (_currentPageIndex == 0 && targetPage > 0) {
-          _currentPageIndex = targetPage;
-        }
         if (_currentPageIndex >= document.pages.length) {
           _currentPageIndex = document.pages.length - 1;
         }
@@ -242,6 +238,10 @@ class _ReadAlongState extends State<ReadAlong> {
                 controller: _pageController,
                 itemCount: pageCount,
                 onPageChanged: (pageIndex) {
+                  if (pageIndex != _currentPageIndex &&
+                      _requestedPageIndex == null) {
+                    _manager.preparePlaybackFromPage(pageIndex);
+                  }
                   setState(() {
                     _currentPageIndex = pageIndex;
                   });
@@ -326,7 +326,9 @@ class _ReadAlongState extends State<ReadAlong> {
     final pages = _manager.document?.pages;
     if (pages == null || pages.isEmpty) return;
 
-    final targetPageIndex = _manager.pageIndexForPosition(_manager.position);
+    final targetPageIndex = _manager.pageIndexForPosition(
+      _manager.displayPosition,
+    );
     if (targetPageIndex != _currentPageIndex) {
       if (_pageController.hasClients) {
         _changePage(targetPageIndex);
@@ -338,21 +340,22 @@ class _ReadAlongState extends State<ReadAlong> {
 
   void _goToPreviousPage() {
     if (_currentPageIndex == 0) return;
-    _changePage(_currentPageIndex - 1);
+    _changePage(_currentPageIndex - 1, fromUser: true);
   }
 
   void _goToFirstPage() {
     if (_currentPageIndex == 0) return;
-    _changePage(0);
+    _changePage(0, fromUser: true);
   }
 
   void _goToNextPage() {
     final pageCount = _manager.document?.pages.length ?? 0;
     if (_currentPageIndex >= pageCount - 1) return;
-    _changePage(_currentPageIndex + 1);
+    _changePage(_currentPageIndex + 1, fromUser: true);
   }
 
-  void _changePage(int pageIndex) {
+  void _changePage(int pageIndex, {bool fromUser = false}) {
+    if (fromUser) _manager.preparePlaybackFromPage(pageIndex);
     if (!_pageController.hasClients) {
       _currentPageIndex = pageIndex;
       return;
