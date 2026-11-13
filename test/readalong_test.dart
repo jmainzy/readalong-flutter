@@ -197,6 +197,44 @@ void main() {
   });
 
   test(
+    'external position ticks do not notify text listeners within a word',
+    () async {
+      final controller = _TestPlaybackController();
+      final audioManager = AudioManager(playbackController: controller);
+      final textManager = TextManager(
+        xml: _sampleXml,
+        xmlAsset: null,
+        audioManager: audioManager,
+      );
+      addTearDown(textManager.dispose);
+      addTearDown(audioManager.dispose);
+      addTearDown(controller.dispose);
+      await textManager.initialize();
+
+      var textNotifications = 0;
+      textManager.addListener(() => textNotifications++);
+      final positionUpdates = <Duration>[];
+      final positionSubscription = audioManager.positionStream.listen(
+        positionUpdates.add,
+      );
+      addTearDown(positionSubscription.cancel);
+
+      controller.emitPosition(const Duration(milliseconds: 300));
+      controller.emitPosition(const Duration(milliseconds: 600));
+
+      expect(textNotifications, 0);
+      expect(positionUpdates, [
+        const Duration(milliseconds: 300),
+        const Duration(milliseconds: 600),
+      ]);
+
+      controller.emitPosition(const Duration(milliseconds: 800));
+      expect(textManager.activeWordId, 'word-2');
+      expect(textNotifications, 1);
+    },
+  );
+
+  test(
     'active word highlighting follows playback after a tapped word',
     () async {
       final controller = _TestPlaybackController(
@@ -344,6 +382,71 @@ void main() {
 
     await tester.pumpWidget(const SizedBox.shrink());
     expect(controller.isClosed, isFalse);
+    await controller.dispose();
+  });
+
+  testWidgets('tapping aligned text seeks and plays the external player', (
+    tester,
+  ) async {
+    final controller = _TestPlaybackController();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: 500,
+          child: ReadAlong(xml: _sampleXml, playbackController: controller),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final sentence = tester.widget<RichText>(
+      find
+          .byWidgetPredicate(
+            (widget) =>
+                widget is RichText &&
+                widget.text.toPlainText().contains('Hello'),
+          )
+          .first,
+    );
+    final sentenceRect = tester.getRect(find.byWidget(sentence));
+    await tester.tapAt(Offset(sentenceRect.left + 5, sentenceRect.center.dy));
+    await tester.pump();
+
+    expect(controller.seekPositions, [const Duration(milliseconds: 250)]);
+    expect(controller.playCount, 1);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await controller.dispose();
+  });
+
+  testWidgets('tapping sentence punctuation seeks to its first aligned word', (
+    tester,
+  ) async {
+    final controller = _TestPlaybackController();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: 500,
+          child: ReadAlong(xml: _sampleXml, playbackController: controller),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final sentenceFinder = find.byWidgetPredicate(
+      (widget) =>
+          widget is RichText && widget.text.toPlainText() == 'Hello, world!',
+    );
+    final sentenceRect = tester.getRect(sentenceFinder);
+    await tester.tapAt(Offset(sentenceRect.right - 1, sentenceRect.center.dy));
+    await tester.pump();
+
+    expect(controller.seekPositions, [const Duration(milliseconds: 250)]);
+    expect(controller.playCount, 1);
+
+    await tester.pumpWidget(const SizedBox.shrink());
     await controller.dispose();
   });
 

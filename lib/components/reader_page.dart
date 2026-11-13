@@ -50,6 +50,8 @@ class _ReaderPageState extends State<ReaderPage> {
   ImageStreamListener? _imageStreamListener;
   double _imageAspectRatio = 1;
   String? _lastActiveWordId;
+  GlobalKey? _lastAutoScrolledSentenceKey;
+  GlobalKey? _pendingAutoScrolledSentenceKey;
   bool _hasRestoredScroll = false;
 
   @override
@@ -88,6 +90,8 @@ class _ReaderPageState extends State<ReaderPage> {
     }
     if (oldWidget.page.id != widget.page.id) {
       _sentenceKeys.clear();
+      _lastAutoScrolledSentenceKey = null;
+      _pendingAutoScrolledSentenceKey = null;
       _hasRestoredScroll = false;
       if (_textScrollController.hasClients) _textScrollController.jumpTo(0);
     }
@@ -164,10 +168,24 @@ class _ReaderPageState extends State<ReaderPage> {
       return;
     }
 
+    final activeSentenceKey = activeWordId == null
+        ? null
+        : _wordSentenceKeys[activeWordId];
     if (activeWordId != null &&
+        activeSentenceKey != _lastAutoScrolledSentenceKey &&
+        activeSentenceKey != _pendingAutoScrolledSentenceKey &&
         (widget.manager.audioManager.isPlaying ||
             widget.manager.audioManager.isSeeking)) {
+      _pendingAutoScrolledSentenceKey = activeSentenceKey;
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_pendingAutoScrolledSentenceKey == activeSentenceKey) {
+          _pendingAutoScrolledSentenceKey = null;
+        }
+        if (!mounted ||
+            _wordSentenceKeys[widget.manager.activeWordId] !=
+                activeSentenceKey) {
+          return;
+        }
         _scrollToActiveSentence();
       });
     }
@@ -220,6 +238,8 @@ class _ReaderPageState extends State<ReaderPage> {
         viewportRenderObject is! RenderBox) {
       return;
     }
+    if (!force && sentenceKey == _lastAutoScrolledSentenceKey) return;
+    _lastAutoScrolledSentenceKey = sentenceKey;
 
     final sentenceTop = sentenceRenderObject.localToGlobal(Offset.zero).dy;
     final viewportTop = viewportRenderObject.localToGlobal(Offset.zero).dy;
@@ -409,35 +429,58 @@ class _ReaderPageState extends State<ReaderPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           for (final (sentenceIndex, sentence) in sentences.indexed)
-            Text.rich(
-              key: _sentenceKeys.putIfAbsent(
-                '$paragraphIndex:$sentenceIndex',
-                GlobalKey.new,
+            GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: widget.audioEnabled
+                  ? () => _playSentence(sentence)
+                  : null,
+              child: Text.rich(
+                key: _sentenceKeys.putIfAbsent(
+                  '$paragraphIndex:$sentenceIndex',
+                  GlobalKey.new,
+                ),
+                TextSpan(
+                  children: [
+                    for (final segment in sentence.segments)
+                      _buildPositionedTextSpan(
+                        context,
+                        segment,
+                        paragraphIndex,
+                        sentenceIndex,
+                      ),
+                  ],
+                ),
+                style: sentence.isTranslation
+                    ? widget.translationTextStyle ??
+                          (Theme.of(context).textTheme.bodyMedium ??
+                                  const TextStyle(fontSize: 14))
+                              .copyWith(
+                                fontSize: 14,
+                                color: Colors.grey.shade600,
+                              )
+                    : widget.textStyle ??
+                          (Theme.of(context).textTheme.bodyLarge ??
+                                  const TextStyle(fontSize: 20))
+                              .copyWith(fontSize: 20),
               ),
-              TextSpan(
-                children: [
-                  for (final segment in sentence.segments)
-                    _buildPositionedTextSpan(
-                      context,
-                      segment,
-                      paragraphIndex,
-                      sentenceIndex,
-                    ),
-                ],
-              ),
-              style: sentence.isTranslation
-                  ? widget.translationTextStyle ??
-                        (Theme.of(context).textTheme.bodyMedium ??
-                                const TextStyle(fontSize: 14))
-                            .copyWith(fontSize: 14, color: Colors.grey.shade600)
-                  : widget.textStyle ??
-                        (Theme.of(context).textTheme.bodyLarge ??
-                                const TextStyle(fontSize: 20))
-                            .copyWith(fontSize: 20),
             ),
         ],
       ),
     );
+  }
+
+  void _playSentence(ReadAlongSentence sentence) {
+    ReadAlongWord? firstAlignedWord;
+    for (final word in sentence.segments.whereType<ReadAlongWord>()) {
+      if (!word.isAligned) continue;
+      if (firstAlignedWord == null ||
+          word.start! < firstAlignedWord.start!) {
+        firstAlignedWord = word;
+      }
+    }
+    if (firstAlignedWord != null) {
+      unawaited(widget.manager.playWordById(firstAlignedWord.id));
+    }
   }
 
   TextSpan _buildPositionedTextSpan(

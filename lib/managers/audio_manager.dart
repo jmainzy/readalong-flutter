@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart' hide PlayerState, ProcessingState;
@@ -66,12 +67,14 @@ class AudioManager extends ChangeNotifier {
       _playbackController.state.processingState == ProcessingState.completed;
   bool get canPlay => _hasExternalPlaybackController || _audioSource != null;
   ValueListenable<ButtonState> get buttonState => _buttonState;
+  Stream<Duration> get positionStream => _playbackController.positionStream;
 
   Future<void> updateSources({
     required AudioSource? audioSource,
     required PlaybackController? playbackController,
   }) async {
-    final controllerChanged = _playbackController != playbackController &&
+    final controllerChanged =
+        _playbackController != playbackController &&
         (playbackController != null || _hasExternalPlaybackController);
     final sourceChanged = _audioSource != audioSource;
     _audioSource = audioSource;
@@ -212,7 +215,8 @@ class AudioManager extends ChangeNotifier {
           ? ButtonState.playing
           : ButtonState.paused,
     );
-    if (state.processingState == ProcessingState.completed && _duration != null) {
+    if (state.processingState == ProcessingState.completed &&
+        _duration != null) {
       _position = _duration!;
     }
     _speed = _playbackController.speed;
@@ -246,7 +250,8 @@ class AudioManager extends ChangeNotifier {
         await _playbackController.seek(start);
         if (_disposed || generation != _operationGeneration) return;
         _position = start;
-      } else if (isCompleted || (_duration != null && _position >= _duration!)) {
+      } else if (isCompleted ||
+          (_duration != null && _position >= _duration!)) {
         await _playbackController.seek(Duration.zero);
         if (_disposed || generation != _operationGeneration) return;
         _position = Duration.zero;
@@ -268,10 +273,7 @@ class AudioManager extends ChangeNotifier {
     }
   }
 
-  Future<void> pauseAt(
-    Duration position, {
-    Duration? resumePosition,
-  }) async {
+  Future<void> pauseAt(Duration position, {Duration? resumePosition}) async {
     final generation = ++_operationGeneration;
     _wordPlaybackEnd = null;
     _nextPlayPositionMilliseconds = resumePosition?.inMilliseconds;
@@ -381,11 +383,20 @@ class AudioManager extends ChangeNotifier {
     if (!canPlay || isAudioLoading) return;
     final generation = ++_operationGeneration;
     _nextPlayPositionMilliseconds = null;
+    int buffer = 0;
+    if (kIsWeb && !_hasExternalPlaybackController) {
+      // add a buffer for web because the playback is weird.
+      buffer = 200;
+      start = Duration(milliseconds: max(start.inMilliseconds - buffer, 0));
+      duration = Duration(milliseconds: duration.inMilliseconds + buffer);
+    }
+
     _wordPlaybackEnd = isPlaying ? null : start + duration;
+
     try {
       await _playbackController.seek(start);
       if (_disposed || generation != _operationGeneration) return;
-      _position = start;
+      _position = start + Duration(milliseconds: buffer);
       await _playbackController.play();
     } catch (error) {
       if (generation == _operationGeneration) {
@@ -396,12 +407,16 @@ class AudioManager extends ChangeNotifier {
   }
 
   Future<void> _finishWordPlayback(Duration end, int generation) async {
+    int buffer = 0;
+    if (kIsWeb && !_hasExternalPlaybackController) {
+      buffer = 200;
+    }
     try {
       await _playbackController.pause();
       if (_disposed || generation != _operationGeneration) return;
-      await _playbackController.seek(end);
+      await _playbackController.seek(end - Duration(milliseconds: buffer));
       if (_disposed || generation != _operationGeneration) return;
-      _position = end;
+      _position = end - Duration(milliseconds: buffer);
       _wordPlaybackEnd = null;
       notifyListeners();
     } catch (error) {

@@ -122,6 +122,7 @@ class _ReadAlongState extends State<ReadAlong> {
   bool _isFullscreen = false;
   int _currentPageIndex = 0;
   int? _requestedPageIndex;
+  StreamSubscription<Duration>? _audioPositionSubscription;
   final Map<String, double> _textScrollOffsets = {};
   ReadAlongPosition? _lastReportedPosition;
 
@@ -139,6 +140,7 @@ class _ReadAlongState extends State<ReadAlong> {
       imagesFolder: widget.imagesFolder,
     );
     _textManager.addListener(_followActiveWord);
+    _bindAudioPositionSubscription();
     unawaited(_textManager.initialize());
   }
 
@@ -177,18 +179,29 @@ class _ReadAlongState extends State<ReadAlong> {
     }
     if (oldWidget.audioSource != widget.audioSource ||
         oldWidget.playbackController != widget.playbackController) {
-      unawaited(
-        _audioManager.updateSources(
-          audioSource: widget.audioSource,
-          playbackController: widget.playbackController,
-        ),
-      );
+      unawaited(_updateAudioSources());
     }
+  }
+
+  Future<void> _updateAudioSources() async {
+    await _audioManager.updateSources(
+      audioSource: widget.audioSource,
+      playbackController: widget.playbackController,
+    );
+    if (mounted) _bindAudioPositionSubscription();
+  }
+
+  void _bindAudioPositionSubscription() {
+    unawaited(_audioPositionSubscription?.cancel());
+    _audioPositionSubscription = _audioManager.positionStream.listen(
+      (_) => _reportPosition(),
+    );
   }
 
   @override
   void dispose() {
     _reportPosition(force: true);
+    unawaited(_audioPositionSubscription?.cancel());
     if (_isFullscreen) {
       unawaited(_setSystemUiMode(false));
     }
@@ -214,7 +227,7 @@ class _ReadAlongState extends State<ReadAlong> {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: Listenable.merge([_textManager, _audioManager]),
+      animation: _textManager.documentRevision,
       builder: (context, _) {
         final document = _textManager.document;
         if (_textManager.xmlError != null) {

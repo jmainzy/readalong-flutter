@@ -7,6 +7,13 @@ import '../models/readalong_document.dart';
 import 'audio_manager.dart';
 import '../parser.dart';
 
+typedef _AlignedPageRange = ({
+  int pageIndex,
+  Duration start,
+  Duration end,
+  ReadAlongWord lastWord,
+});
+
 /// Owns document parsing, word highlighting, and page-timing decisions.
 class TextManager extends ChangeNotifier {
   TextManager({
@@ -32,12 +39,19 @@ class TextManager extends ChangeNotifier {
   String? _activeWordId;
   String? _manuallyHighlightedWordId;
   Duration _lastPosition = Duration.zero;
+  List<ReadAlongWord> _alignedWords = [];
+  List<Duration> _alignedWordMaximumEnds = [];
+  List<_AlignedPageRange> _pageRanges = [];
+  Map<String, ReadAlongWord> _wordsById = {};
+  int _lastPageIndex = 0;
+  final ValueNotifier<int> _documentRevision = ValueNotifier(0);
   bool _pauseAtPageEnds = false;
   bool _handlingPageBoundary = false;
   bool _disposed = false;
   int _documentConfiguration = 0;
 
   ReadAlongDocument? get document => _document;
+  ValueListenable<int> get documentRevision => _documentRevision;
   Object? get xmlError => _xmlError;
   String? get activeWordId => _activeWordId;
   bool get autoplay => !_pauseAtPageEnds;
@@ -61,18 +75,27 @@ class TextManager extends ChangeNotifier {
     _xmlError = null;
     _activeWordId = null;
     _manuallyHighlightedWordId = null;
+    _alignedWords = [];
+    _alignedWordMaximumEnds = [];
+    _pageRanges = [];
+    _wordsById = {};
+    _lastPageIndex = 0;
+    _documentRevision.value++;
     notifyListeners();
     try {
       final source = _xml ?? await rootBundle.loadString(_xmlAsset!);
       if (_disposed || configuration != _documentConfiguration) return;
       _document = _parser.parseXml(source);
+      _indexDocument(_document!);
       _xmlError = null;
       _lastPosition = audioManager.displayPosition;
       _updateActiveWord(audioManager.displayPosition);
+      _lastPageIndex = pageIndexForPosition(audioManager.displayPosition);
     } catch (error) {
       if (_disposed || configuration != _documentConfiguration) return;
       _xmlError = error;
     }
+    _documentRevision.value++;
     notifyListeners();
   }
 
@@ -81,9 +104,9 @@ class TextManager extends ChangeNotifier {
     final position = audioManager.displayPosition;
     final manuallyHighlightedWord = _manuallyHighlightedWordId == null
         ? null
-        : _document?.words
-              .where((word) => word.id == _manuallyHighlightedWordId)
-              .firstOrNull;
+        : _wordsById[_manuallyHighlightedWordId];
+    final previousActiveWordId = _activeWordId;
+    final previousPageIndex = _lastPageIndex;
     if (audioManager.isSeeking ||
         (manuallyHighlightedWord != null &&
             (!manuallyHighlightedWord.isAligned ||
@@ -114,7 +137,26 @@ class TextManager extends ChangeNotifier {
       }
     }
     _lastPosition = position;
-    notifyListeners();
+    final pageIndex = pageIndexForPosition(position);
+    _lastPageIndex = pageIndex;
+    if (previousActiveWordId != _activeWordId ||
+        previousPageIndex != pageIndex) {
+      notifyListeners();
+    }
+  }
+
+  void _indexDocument(ReadAlongDocument document) {
+    _wordsById = {for (final word in document.words) word.id: word};
+    _alignedWords = document.words.where((word) => word.isAligned).toList()
+      ..sort((first, second) => first.start!.compareTo(second.start!));
+    Duration? maximumEnd;
+    _alignedWordMaximumEnds = [];
+    for (final word in _alignedWords) {
+      final wordEnd = word.start! + word.duration!;
+      if (maximumEnd == null || wordEnd > maximumEnd) maximumEnd = wordEnd;
+      _alignedWordMaximumEnds.add(maximumEnd);
+    }
+    _pageRanges = _buildAlignedPageRanges(document);
   }
 
   void _updateActiveWord(Duration position) {
@@ -125,36 +167,33 @@ class TextManager extends ChangeNotifier {
     _activeWordId = _nearestWordForPosition(position)?.id;
   }
 
-  List<({int pageIndex, Duration start, Duration end, ReadAlongWord lastWord})>
-  _alignedPageRanges() {
-    final pages = _document?.pages;
-    if (pages == null) return [];
-    final ranges =
-        <
-          ({
-            int pageIndex,
-            Duration start,
-            Duration end,
-            ReadAlongWord lastWord,
-          })
-        >[];
+  List<_AlignedPageRange> _buildAlignedPageRanges(
+    ReadAlongDocument document,
+  ) {
+    final ranges = <_AlignedPageRange>[];
+    final pages = document.pages;
     for (final (pageIndex, page) in pages.indexed) {
-      final words = page.paragraphs
-          .expand((paragraph) => paragraph.sentences)
-          .expand((sentence) => sentence.segments)
-          .whereType<ReadAlongWord>()
-          .where((word) => word.isAligned)
-          .toList();
-      if (words.isEmpty) continue;
-      final starts = words.map((word) => word.start!).toList()..sort();
-      final lastWord = words.reduce((latest, word) {
-        final wordEnd = word.start! + word.duration!;
-        final latestEnd = latest.start! + latest.duration!;
-        return wordEnd > latestEnd ? word : latest;
-      });
+      ReadAlongWord? firstWord;
+      ReadAlongWord? lastWord;
+      for (final paragraph in page.paragraphs) {
+        for (final sentence in paragraph.sentences) {
+          for (final segment in sentence.segments) {
+            if (segment is! ReadAlongWord || !segment.isAligned) continue;
+            if (firstWord == null || segment.start! < firstWord.start!) {
+              firstWord = segment;
+            }
+            if (lastWord == null ||
+                segment.start! + segment.duration! >
+                    lastWord.start! + lastWord.duration!) {
+              lastWord = segment;
+            }
+          }
+        }
+      }
+      if (firstWord == null || lastWord == null) continue;
       ranges.add((
         pageIndex: pageIndex,
-        start: starts.first,
+        start: firstWord.start!,
         end: lastWord.start! + lastWord.duration!,
         lastWord: lastWord,
       ));
@@ -163,10 +202,8 @@ class TextManager extends ChangeNotifier {
   }
 
   Duration _pageTurnBoundary(
-    ({int pageIndex, Duration start, Duration end, ReadAlongWord lastWord})
-    currentPage,
-    ({int pageIndex, Duration start, Duration end, ReadAlongWord lastWord})
-    nextPage,
+    _AlignedPageRange currentPage,
+    _AlignedPageRange nextPage,
   ) {
     final gap = nextPage.start - currentPage.end;
     if (gap <= Duration.zero) return currentPage.end;
@@ -177,7 +214,7 @@ class TextManager extends ChangeNotifier {
     Duration previousPosition,
     Duration position,
   ) {
-    final ranges = _alignedPageRanges();
+    final ranges = _pageRanges;
     for (var index = 0; index < ranges.length - 1; index++) {
       final boundary = _pageTurnBoundary(ranges[index], ranges[index + 1]);
       if (previousPosition < boundary && position >= boundary) {
@@ -190,7 +227,7 @@ class TextManager extends ChangeNotifier {
   int pageIndexForPosition(Duration position) {
     final pages = _document?.pages;
     if (pages == null || pages.isEmpty) return 0;
-    final ranges = _alignedPageRanges();
+    final ranges = _pageRanges;
     if (ranges.isEmpty) return 0;
     for (var index = 0; index < ranges.length - 1; index++) {
       if (position < _pageTurnBoundary(ranges[index], ranges[index + 1])) {
@@ -205,26 +242,43 @@ class TextManager extends ChangeNotifier {
     if (pages == null || pageIndex < 0 || pageIndex >= pages.length) {
       return null;
     }
-    for (final range in _alignedPageRanges()) {
+    for (final range in _pageRanges) {
       if (range.pageIndex == pageIndex) return range.start;
     }
     return null;
   }
 
   ReadAlongWord? _nearestWordForPosition(Duration position) {
-    ReadAlongWord? candidate;
-    for (final word in _document?.words ?? const <ReadAlongWord>[]) {
-      if (!word.isAligned) continue;
-      final start = word.start!;
-      final end = start + word.duration!;
-      if (position >= start && position < end) return word;
-      if (start <= position) {
-        candidate = word;
-      } else if (candidate == null) {
-        return word;
+    var low = 0;
+    var high = _alignedWords.length;
+    while (low < high) {
+      final middle = (low + high) ~/ 2;
+      if (_alignedWords[middle].start! < position) {
+        low = middle + 1;
+      } else {
+        high = middle;
       }
     }
-    return candidate;
+    if (low < _alignedWords.length &&
+        _alignedWords[low].start == position) {
+      return _alignedWords[low];
+    }
+    var left = 0;
+    var right = low;
+    while (left < right) {
+      final middle = (left + right) ~/ 2;
+      if (_alignedWordMaximumEnds[middle] > position) {
+        right = middle;
+      } else {
+        left = middle + 1;
+      }
+    }
+    for (var index = low - 1; index >= left; index--) {
+      final word = _alignedWords[index];
+      if (position < word.start! + word.duration!) return word;
+    }
+    if (low < _alignedWords.length) return _alignedWords[low];
+    return _alignedWords.isEmpty ? null : _alignedWords.last;
   }
 
   ReadAlongWord? _nextAlignedPage(int pageIndex) {
@@ -250,6 +304,7 @@ class TextManager extends ChangeNotifier {
   void togglePagePlaybackMode() {
     _pauseAtPageEnds = !_pauseAtPageEnds;
     _lastPosition = audioManager.position;
+    _lastPageIndex = pageIndexForPosition(audioManager.position);
     notifyListeners();
   }
 
@@ -259,7 +314,7 @@ class TextManager extends ChangeNotifier {
   }
 
   Future<void> playWordById(String id) async {
-    final word = _document?.words.where((item) => item.id == id).firstOrNull;
+    final word = _wordsById[id];
     if (word == null || !word.isAligned || !audioManager.canPlay) return;
     _manuallyHighlightedWordId = word.id;
     _activeWordId = word.id;
@@ -285,6 +340,7 @@ class TextManager extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     audioManager.removeListener(_handleAudioChanged);
+    _documentRevision.dispose();
     super.dispose();
   }
 }
