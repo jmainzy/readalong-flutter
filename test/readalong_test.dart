@@ -149,78 +149,118 @@ final _alignedLongPageXml =
 ''';
 
 void main() {
-  test('Manager loads document and owns playback state', () async {
-    final manager = Manager(xml: _sampleXml, xmlAsset: null, audioSource: null);
-    addTearDown(manager.dispose);
+  test('text and audio managers initialize independently', () async {
+    final audioManager = AudioManager();
+    final textManager = TextManager(
+      xml: _sampleXml,
+      xmlAsset: null,
+      audioManager: audioManager,
+    );
+    addTearDown(textManager.dispose);
+    addTearDown(audioManager.dispose);
 
-    await manager.initialize();
+    await textManager.initialize();
 
-    expect(manager.document?.pages.single.id, 'page-1');
-    expect(manager.xmlError, isNull);
-    expect(manager.isAudioLoading, isFalse);
-    expect(manager.position, Duration.zero);
+    expect(textManager.document?.pages.single.id, 'page-1');
+    expect(textManager.xmlError, isNull);
+    expect(audioManager.isAudioLoading, isFalse);
+    expect(audioManager.position, Duration.zero);
   });
 
   test('external playback controller drives aligned reader playback', () async {
     final controller = _TestPlaybackController();
-    final manager = Manager(
+    final audioManager = AudioManager(playbackController: controller);
+    final textManager = TextManager(
       xml: _sampleXml,
       xmlAsset: null,
-      audioSource: null,
-      playbackController: controller,
+      audioManager: audioManager,
     );
+    addTearDown(controller.dispose);
 
-    await manager.initialize();
-    expect(manager.duration, controller.duration);
+    await textManager.initialize();
+    expect(audioManager.duration, controller.duration);
 
-    await manager.play();
+    await audioManager.play();
     expect(controller.playCount, 1);
 
     controller.emitPosition(const Duration(milliseconds: 500));
-    expect(manager.activeWordId, 'word-1');
+    expect(textManager.activeWordId, 'word-1');
 
-    await manager.replay();
+    await audioManager.replay();
     expect(controller.pauseCount, 1);
     expect(controller.seekPositions, [Duration.zero]);
     expect(controller.playCount, 2);
 
-    manager.dispose();
+    textManager.dispose();
+    audioManager.dispose();
     expect(controller.isClosed, isFalse);
-    await controller.dispose();
   });
+
+  test(
+    'active word highlighting follows playback after a tapped word',
+    () async {
+      final controller = _TestPlaybackController(
+        duration: const Duration(seconds: 10),
+      );
+      final audioManager = AudioManager(playbackController: controller);
+      final textManager = TextManager(
+        xml: _twoAlignedPageXml,
+        xmlAsset: null,
+        audioManager: audioManager,
+      );
+      addTearDown(textManager.dispose);
+      addTearDown(audioManager.dispose);
+      addTearDown(controller.dispose);
+      await textManager.initialize();
+
+      await textManager.playWordById('word-1');
+      expect(textManager.activeWordId, 'word-1');
+
+      await audioManager.seek(const Duration(seconds: 5));
+
+      expect(textManager.activeWordId, 'word-2');
+    },
+  );
 
   test(
     'autoplay pauses and turns page halfway through the inter-page gap',
     () async {
       final controller = _TestPlaybackController();
-      final manager = Manager(
+      final audioManager = AudioManager(playbackController: controller);
+      final textManager = TextManager(
         xml: _twoAlignedPageXml,
         xmlAsset: null,
-        audioSource: null,
-        playbackController: controller,
+        audioManager: audioManager,
       );
-      addTearDown(manager.dispose);
+      addTearDown(textManager.dispose);
+      addTearDown(audioManager.dispose);
       addTearDown(controller.dispose);
-      await manager.initialize();
+      await textManager.initialize();
 
       expect(
-        manager.pageIndexForPosition(const Duration(milliseconds: 2999)),
+        textManager.pageIndexForPosition(const Duration(milliseconds: 2999)),
         0,
       );
-      expect(manager.pageIndexForPosition(const Duration(seconds: 3)), 1);
+      expect(textManager.pageIndexForPosition(const Duration(seconds: 3)), 1);
 
-      manager.togglePagePlaybackMode();
-      await manager.play();
+      textManager.togglePagePlaybackMode();
+      await audioManager.play();
       controller.emitPosition(const Duration(seconds: 2));
-      expect(manager.isPlaying, isTrue);
+      expect(audioManager.isPlaying, isTrue);
       expect(controller.pauseCount, 0);
 
       controller.emitPosition(const Duration(seconds: 3));
       await Future<void>.delayed(Duration.zero);
 
-      expect(manager.isPlaying, isFalse);
-      expect(manager.position, const Duration(seconds: 3));
+      expect(audioManager.isPlaying, isFalse);
+      expect(audioManager.position, const Duration(seconds: 3));
       expect(controller.seekPositions, [const Duration(seconds: 3)]);
+
+      await audioManager.play();
+      expect(controller.seekPositions, [
+        const Duration(seconds: 3),
+        const Duration(seconds: 5),
+      ]);
     },
   );
 
@@ -230,30 +270,25 @@ void main() {
       final controller = _TestPlaybackController(
         initialPosition: const Duration(milliseconds: 800),
       );
-      final manager = Manager(
+      final audioManager = AudioManager(playbackController: controller);
+      final textManager = TextManager(
         xml: _sampleXml,
         xmlAsset: null,
-        audioSource: null,
-        playbackController: controller,
+        audioManager: audioManager,
       );
-      addTearDown(manager.dispose);
+      addTearDown(textManager.dispose);
+      addTearDown(audioManager.dispose);
 
-      await manager.initialize();
-      expect(manager.position, const Duration(milliseconds: 800));
-      expect(manager.activeWordId, 'word-2');
+      await textManager.initialize();
+      expect(audioManager.position, const Duration(milliseconds: 800));
+      expect(textManager.activeWordId, 'word-2');
     },
   );
 
   test('external playback state mirrors JustAudio state transitions', () async {
     final controller = _TestPlaybackController();
-    final manager = Manager(
-      xml: _sampleXml,
-      xmlAsset: null,
-      audioSource: null,
-      playbackController: controller,
-    );
+    final manager = AudioManager(playbackController: controller);
     addTearDown(manager.dispose);
-    await manager.initialize();
 
     controller.emitState(PlayerState(false, ProcessingState.loading));
     expect(manager.buttonState.value, ButtonState.pausedLoading);
@@ -366,21 +401,24 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final manager = tester.widget<ReaderPage>(find.byType(ReaderPage)).manager;
+    final textManager = tester
+        .widget<ReaderPage>(find.byType(ReaderPage))
+        .manager;
+    final audioManager = textManager.audioManager;
     final pageController = tester
         .widget<PageView>(find.byType(PageView))
         .controller!;
-    await manager.beginSeek();
-    manager.updateSeekPreviewMilliseconds(5000);
+    await audioManager.beginSeek();
+    audioManager.updateSeekPreviewMilliseconds(5000);
     await tester.pumpAndSettle();
 
-    expect(manager.activeWordId, 'word-2');
+    expect(textManager.activeWordId, 'word-2');
     expect(pageController.page, closeTo(1, 0.01));
 
-    manager.updateSeekPreviewMilliseconds(0);
+    audioManager.updateSeekPreviewMilliseconds(0);
     await tester.pumpAndSettle();
 
-    expect(manager.activeWordId, 'word-1');
+    expect(textManager.activeWordId, 'word-1');
     expect(pageController.page, closeTo(0, 0.01));
   });
 
@@ -405,24 +443,25 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final manager = tester
+    final textManager = tester
         .widgetList<ReaderPage>(find.byType(ReaderPage))
         .first
         .manager;
+    final audioManager = textManager.audioManager;
     final pageView = find.byType(PageView);
 
     await tester.drag(pageView, const Offset(-500, 0));
     await tester.pumpAndSettle();
-    await manager.play();
+    await audioManager.play();
     await tester.pumpAndSettle();
 
     expect(controller.seekPositions, [const Duration(seconds: 5)]);
 
-    await manager.pause();
+    await audioManager.pause();
     await tester.pumpAndSettle();
     await tester.drag(pageView, const Offset(500, 0));
     await tester.pumpAndSettle();
-    await manager.play();
+    await audioManager.play();
     await tester.pumpAndSettle();
 
     expect(controller.seekPositions, [
@@ -434,19 +473,21 @@ void main() {
   test(
     'seek preview updates the highlighted word without committing position',
     () async {
-      final manager = Manager(
+      final audioManager = AudioManager();
+      final manager = TextManager(
         xml: _sampleXml,
         xmlAsset: null,
-        audioSource: null,
+        audioManager: audioManager,
       );
       addTearDown(manager.dispose);
+      addTearDown(audioManager.dispose);
       await manager.initialize();
 
-      await manager.beginSeek();
-      manager.updateSeekPreviewMilliseconds(900);
+      await audioManager.beginSeek();
+      audioManager.updateSeekPreviewMilliseconds(900);
 
-      expect(manager.displayPosition, const Duration(milliseconds: 900));
-      expect(manager.position, Duration.zero);
+      expect(audioManager.displayPosition, const Duration(milliseconds: 900));
+      expect(audioManager.position, Duration.zero);
       expect(manager.activeWordId, 'word-2');
     },
   );
@@ -459,10 +500,15 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    final manager = Manager(xml: _sampleXml, xmlAsset: null, audioSource: null);
-    await manager.initialize();
+    final audioManager = AudioManager();
+    final textManager = TextManager(
+      xml: _sampleXml,
+      xmlAsset: null,
+      audioManager: audioManager,
+    );
     addTearDown(() async {
-      manager.dispose();
+      textManager.dispose();
+      audioManager.dispose();
     });
     final changedSpeeds = <double>[];
 
@@ -472,7 +518,8 @@ void main() {
           body: Align(
             alignment: Alignment.bottomCenter,
             child: AudioPlayerWidget(
-              manager: manager,
+              manager: audioManager,
+              textManager: textManager,
               onSpeedChanged: changedSpeeds.add,
             ),
           ),
@@ -497,7 +544,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(manager.speed, 1.5);
+    expect(audioManager.speed, 1.5);
     expect(changedSpeeds, contains(1.5));
   });
 
@@ -509,9 +556,14 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    final manager = Manager(xml: _sampleXml, xmlAsset: null, audioSource: null);
-    await manager.initialize();
-    addTearDown(manager.dispose);
+    final audioManager = AudioManager();
+    final textManager = TextManager(
+      xml: _sampleXml,
+      xmlAsset: null,
+      audioManager: audioManager,
+    );
+    addTearDown(textManager.dispose);
+    addTearDown(audioManager.dispose);
 
     await tester.pumpWidget(
       MaterialApp(
@@ -519,7 +571,11 @@ void main() {
           body: Center(
             child: SizedBox(
               width: 360,
-              child: AudioPlayerWidget(manager: manager, title: 'Speaker name'),
+              child: AudioPlayerWidget(
+                manager: audioManager,
+                textManager: textManager,
+                title: 'Speaker name',
+              ),
             ),
           ),
         ),
@@ -551,15 +607,22 @@ void main() {
   testWidgets('autoplay toggle switches between auto and pause-at-page modes', (
     tester,
   ) async {
-    final manager = Manager(xml: _sampleXml, xmlAsset: null, audioSource: null);
-    addTearDown(manager.dispose);
+    final audioManager = AudioManager();
+    final textManager = TextManager(
+      xml: _sampleXml,
+      xmlAsset: null,
+      audioManager: audioManager,
+    );
+    addTearDown(textManager.dispose);
+    addTearDown(audioManager.dispose);
     final autoplayChanges = <bool>[];
 
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: AudioPlayerWidget(
-            manager: manager,
+            manager: audioManager,
+            textManager: textManager,
             canGoToNextPage: true,
             onAutoplayChanged: autoplayChanges.add,
           ),
@@ -567,13 +630,13 @@ void main() {
       ),
     );
 
-    expect(manager.autoplay, isTrue);
+    expect(textManager.autoplay, isTrue);
     expect(find.byTooltip('Autoplay On'), findsOneWidget);
 
     await tester.tap(find.byTooltip('Autoplay On'));
     await tester.pump();
 
-    expect(manager.autoplay, isFalse);
+    expect(textManager.autoplay, isFalse);
     expect(autoplayChanges, [false]);
     expect(find.byTooltip('Autoplay Off'), findsOneWidget);
     expect(find.text('Autoplay off'), findsOneWidget);
@@ -581,7 +644,7 @@ void main() {
     await tester.tap(find.byTooltip('Autoplay Off'));
     await tester.pump();
 
-    expect(manager.autoplay, isTrue);
+    expect(textManager.autoplay, isTrue);
     expect(autoplayChanges, [false, true]);
     expect(find.byTooltip('Autoplay On'), findsOneWidget);
   });
@@ -786,9 +849,15 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    final manager = Manager(xml: _imageXml, xmlAsset: null, audioSource: null);
+    final audioManager = AudioManager();
+    final manager = TextManager(
+      xml: _imageXml,
+      xmlAsset: null,
+      audioManager: audioManager,
+    );
     await manager.initialize();
     addTearDown(manager.dispose);
+    addTearDown(audioManager.dispose);
     var backgroundTapCount = 0;
 
     await tester.pumpWidget(
@@ -833,9 +902,15 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    final manager = Manager(xml: _imageXml, xmlAsset: null, audioSource: null);
+    final audioManager = AudioManager();
+    final manager = TextManager(
+      xml: _imageXml,
+      xmlAsset: null,
+      audioManager: audioManager,
+    );
     await manager.initialize();
     addTearDown(manager.dispose);
+    addTearDown(audioManager.dispose);
     var backgroundTapCount = 0;
 
     await tester.pumpWidget(
@@ -872,13 +947,15 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
 
-      final manager = Manager(
+      final audioManager = AudioManager();
+      final manager = TextManager(
         xml: _alignedLongPageXml,
         xmlAsset: null,
-        audioSource: null,
+        audioManager: audioManager,
       );
       await manager.initialize();
       addTearDown(manager.dispose);
+      addTearDown(audioManager.dispose);
 
       await tester.pumpWidget(
         MaterialApp(
@@ -894,8 +971,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await manager.beginSeek();
-      manager.updateSeekPreviewMilliseconds(10500);
+      await audioManager.beginSeek();
+      audioManager.updateSeekPreviewMilliseconds(10500);
       await tester.pumpAndSettle();
 
       final scrollState = tester.state<ScrollableState>(
@@ -923,7 +1000,13 @@ void main() {
     tester,
   ) async {
     final manager = _ReplayManager();
+    final textManager = TextManager(
+      xml: _sampleXml,
+      xmlAsset: null,
+      audioManager: manager,
+    );
     addTearDown(manager.dispose);
+    addTearDown(textManager.dispose);
     var replayCallbackCalled = false;
 
     await tester.pumpWidget(
@@ -934,6 +1017,7 @@ void main() {
               width: 360,
               child: AudioPlayerWidget(
                 manager: manager,
+                textManager: textManager,
                 onReplay: () => replayCallbackCalled = true,
               ),
             ),
@@ -953,19 +1037,13 @@ void main() {
     'replay after completion returns the player to the playing state',
     () async {
       final player = _CompletedReplayAudioPlayer();
-      final manager = Manager(
-        xml: _sampleXml,
-        xmlAsset: null,
-        audioSource: null,
-        audioPlayer: player,
-      );
+      final manager = AudioManager(audioPlayer: player);
       addTearDown(() async {
         manager.dispose();
         await player.close();
         await player.dispose();
       });
 
-      await manager.initialize();
       player.complete();
       expect(manager.buttonState.value, ButtonState.completed);
 
@@ -1220,8 +1298,8 @@ void main() {
   );
 }
 
-class _ReplayManager extends Manager {
-  _ReplayManager() : super(xml: _sampleXml, xmlAsset: null, audioSource: null);
+class _ReplayManager extends AudioManager {
+  _ReplayManager() : super(audioSource: null);
 
   final ValueNotifier<ButtonState> _completedState = ValueNotifier(
     ButtonState.completed,

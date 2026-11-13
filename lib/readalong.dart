@@ -9,8 +9,10 @@ import 'package:readalong/models/readalong_position.dart';
 import 'package:readalong/models/playback_controller.dart';
 
 import 'components/audio_widget.dart';
+import 'managers/audio_manager.dart';
 import 'managers/text_manager.dart';
 
+export 'managers/audio_manager.dart';
 export 'managers/text_manager.dart';
 export 'models/playback_controller.dart';
 export 'models/readalong_position.dart';
@@ -114,7 +116,8 @@ class ReadAlong extends StatefulWidget {
 }
 
 class _ReadAlongState extends State<ReadAlong> {
-  late final Manager _manager;
+  late final AudioManager _audioManager;
+  late final TextManager _textManager;
   final PageController _pageController = PageController();
   bool _isFullscreen = false;
   int _currentPageIndex = 0;
@@ -125,15 +128,18 @@ class _ReadAlongState extends State<ReadAlong> {
   @override
   void initState() {
     super.initState();
-    _manager = Manager(
-      xml: widget.xml,
-      xmlAsset: widget.xmlAsset,
+    _audioManager = AudioManager(
       audioSource: widget.audioSource,
       playbackController: widget.playbackController,
+    );
+    _textManager = TextManager(
+      xml: widget.xml,
+      xmlAsset: widget.xmlAsset,
+      audioManager: _audioManager,
       imagesFolder: widget.imagesFolder,
     );
-    _manager.addListener(_followActiveWord);
-    unawaited(_manager.initialize());
+    _textManager.addListener(_followActiveWord);
+    unawaited(_textManager.initialize());
   }
 
   @override
@@ -158,17 +164,21 @@ class _ReadAlongState extends State<ReadAlong> {
       _lastReportedPosition = null;
       _reportPosition();
     }
-    if (oldWidget.xml != widget.xml ||
-        oldWidget.xmlAsset != widget.xmlAsset ||
-        oldWidget.audioSource != widget.audioSource ||
-        oldWidget.playbackController != widget.playbackController) {
+    if (oldWidget.xml != widget.xml || oldWidget.xmlAsset != widget.xmlAsset) {
       _currentPageIndex = 0;
       _requestedPageIndex = null;
       if (_pageController.hasClients) _pageController.jumpToPage(0);
       unawaited(
-        _manager.updateSources(
+        _textManager.updateSources(
           xml: widget.xml,
           xmlAsset: widget.xmlAsset,
+        ),
+      );
+    }
+    if (oldWidget.audioSource != widget.audioSource ||
+        oldWidget.playbackController != widget.playbackController) {
+      unawaited(
+        _audioManager.updateSources(
           audioSource: widget.audioSource,
           playbackController: widget.playbackController,
         ),
@@ -182,8 +192,9 @@ class _ReadAlongState extends State<ReadAlong> {
     if (_isFullscreen) {
       unawaited(_setSystemUiMode(false));
     }
-    _manager.removeListener(_followActiveWord);
-    _manager.dispose();
+    _textManager.removeListener(_followActiveWord);
+    _textManager.dispose();
+    _audioManager.dispose();
     _pageController.dispose();
     super.dispose();
   }
@@ -203,14 +214,16 @@ class _ReadAlongState extends State<ReadAlong> {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: _manager,
+      animation: Listenable.merge([_textManager, _audioManager]),
       builder: (context, _) {
-        final document = _manager.document;
-        if (_manager.xmlError != null) {
+        final document = _textManager.document;
+        if (_textManager.xmlError != null) {
           return Center(
             child: Padding(
               padding: const EdgeInsets.all(16),
-              child: Text('Unable to load ReadAlong XML: ${_manager.xmlError}'),
+              child: Text(
+                'Unable to load ReadAlong XML: ${_textManager.xmlError}',
+              ),
             ),
           );
         }
@@ -240,7 +253,7 @@ class _ReadAlongState extends State<ReadAlong> {
                 onPageChanged: (pageIndex) {
                   if (pageIndex != _currentPageIndex &&
                       _requestedPageIndex == null) {
-                    _manager.preparePlaybackFromPage(pageIndex);
+                    _textManager.preparePlaybackFromPage(pageIndex);
                   }
                   setState(() {
                     _currentPageIndex = pageIndex;
@@ -252,11 +265,11 @@ class _ReadAlongState extends State<ReadAlong> {
                   return ReaderPage(
                     key: ValueKey(page.id),
                     page: page,
-                    manager: _manager,
+                    manager: _textManager,
                     audioEnabled:
                         widget.audioSource != null ||
                         widget.playbackController != null,
-                    audioError: _manager.audioError,
+                    audioError: _audioManager.audioError,
                     translationTextStyle: widget.translationTextStyle,
                     textStyle: widget.textStyle,
                     showTranslations: widget.showTranslations,
@@ -266,7 +279,7 @@ class _ReadAlongState extends State<ReadAlong> {
                         _updateTextScrollOffset(page.id, offset),
                     imageUri:
                         widget.imagesFolder != null && page.imageUrl != null
-                        ? _manager.getImageAsset(page.imageUrl!)
+                        ? _textManager.getImageAsset(page.imageUrl!)
                         : null,
                   );
                 },
@@ -274,7 +287,8 @@ class _ReadAlongState extends State<ReadAlong> {
             ),
             widget.audioSource != null
                 ? AudioPlayerWidget(
-                    manager: _manager,
+                    manager: _audioManager,
+                    textManager: _textManager,
                     title: widget.audioTitle,
                     onAutoplayChanged: widget.onAutoplayChanged,
                     onSpeedChanged: widget.onSpeedChanged,
@@ -292,7 +306,7 @@ class _ReadAlongState extends State<ReadAlong> {
   }
 
   void _reportPosition({bool force = false}) {
-    final document = _manager.document;
+    final document = _textManager.document;
     if (document == null || document.pages.isEmpty) return;
     final pageIndex = _currentPageIndex
         .clamp(0, document.pages.length - 1)
@@ -303,11 +317,11 @@ class _ReadAlongState extends State<ReadAlong> {
       audioPosition:
           widget.audioSource == null && widget.playbackController == null
           ? null
-          : _manager.position,
+          : _audioManager.position,
       activeWordId:
           widget.audioSource == null && widget.playbackController == null
           ? null
-          : _manager.activeWordId,
+          : _textManager.activeWordId,
       textScrollOffset: _textScrollOffsets[page.id] ?? 0,
     );
     if (!force && position == _lastReportedPosition) return;
@@ -323,11 +337,11 @@ class _ReadAlongState extends State<ReadAlong> {
 
   void _followActiveWord() {
     _reportPosition();
-    final pages = _manager.document?.pages;
+    final pages = _textManager.document?.pages;
     if (pages == null || pages.isEmpty) return;
 
-    final targetPageIndex = _manager.pageIndexForPosition(
-      _manager.displayPosition,
+    final targetPageIndex = _textManager.pageIndexForPosition(
+      _audioManager.displayPosition,
     );
     if (targetPageIndex != _currentPageIndex) {
       if (_pageController.hasClients) {
@@ -349,13 +363,13 @@ class _ReadAlongState extends State<ReadAlong> {
   }
 
   void _goToNextPage() {
-    final pageCount = _manager.document?.pages.length ?? 0;
+    final pageCount = _textManager.document?.pages.length ?? 0;
     if (_currentPageIndex >= pageCount - 1) return;
     _changePage(_currentPageIndex + 1, fromUser: true);
   }
 
   void _changePage(int pageIndex, {bool fromUser = false}) {
-    if (fromUser) _manager.preparePlaybackFromPage(pageIndex);
+    if (fromUser) _textManager.preparePlaybackFromPage(pageIndex);
     if (!_pageController.hasClients) {
       _currentPageIndex = pageIndex;
       return;

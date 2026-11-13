@@ -3,12 +3,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:readalong/components/speed_dialog.dart';
 
+import '../managers/audio_manager.dart';
 import '../managers/text_manager.dart';
 
 class AudioPlayerWidget extends StatelessWidget {
   const AudioPlayerWidget({
     super.key,
     required this.manager,
+    required this.textManager,
     this.title,
     this.onAutoplayChanged,
     this.onSpeedChanged,
@@ -19,7 +21,8 @@ class AudioPlayerWidget extends StatelessWidget {
     this.canGoToNextPage = false,
   });
 
-  final Manager manager;
+  final AudioManager manager;
+  final TextManager textManager;
   final String? title;
   final ValueChanged<bool>? onAutoplayChanged;
   final ValueChanged<double>? onSpeedChanged;
@@ -63,14 +66,14 @@ class AudioPlayerWidget extends StatelessWidget {
                   maintainAnimation: true,
                   maintainState: true,
                   child: AnimatedBuilder(
-                    animation: manager,
+                    animation: textManager,
                     builder: (context, _) {
-                      final autoplay = manager.autoplay;
+                      final autoplay = textManager.autoplay;
                       return IconButton(
                         tooltip: autoplay ? 'Autoplay On' : 'Autoplay Off',
                         onPressed: () {
-                          manager.togglePagePlaybackMode();
-                          onAutoplayChanged?.call(manager.autoplay);
+                          textManager.togglePagePlaybackMode();
+                          onAutoplayChanged?.call(textManager.autoplay);
                           final screenWidth = MediaQuery.of(context).size.width;
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
@@ -82,7 +85,7 @@ class AudioPlayerWidget extends StatelessWidget {
                                 126,
                               ),
                               content: Text(
-                                'Autoplay ${manager.autoplay ? 'on' : 'off'}',
+                                'Autoplay ${textManager.autoplay ? 'on' : 'off'}',
                               ),
                               duration: const Duration(seconds: 2),
                             ),
@@ -219,7 +222,7 @@ class AudioPlayerWidget extends StatelessWidget {
 
 class PlayButton extends StatelessWidget {
   const PlayButton({super.key, required this.manager, this.onReplay});
-  final Manager manager;
+  final AudioManager manager;
   final VoidCallback? onReplay;
 
   @override

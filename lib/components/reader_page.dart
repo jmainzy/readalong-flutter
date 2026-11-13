@@ -15,7 +15,7 @@ class ReaderPage extends StatefulWidget {
   final String? imageUri;
   final VoidCallback? onBackgroundTap;
   final ValueChanged<double>? onTextScrollOffsetChanged;
-  final Manager manager;
+  final TextManager manager;
   final bool audioEnabled;
   final Object? audioError;
 
@@ -60,7 +60,7 @@ class _ReaderPageState extends State<ReaderPage> {
     _textScrollController.addListener(_reportTextScrollOffset);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _reportTextScrollOffset();
-      if (widget.manager.position > Duration.zero) {
+      if (widget.manager.audioManager.position > Duration.zero) {
         _hasRestoredScroll = true;
         _scrollToActiveSentence(force: true);
       }
@@ -155,7 +155,8 @@ class _ReaderPageState extends State<ReaderPage> {
       if (mounted) setState(() {});
     }
 
-    if (!_hasRestoredScroll && widget.manager.position > Duration.zero) {
+    if (!_hasRestoredScroll &&
+        widget.manager.audioManager.position > Duration.zero) {
       _hasRestoredScroll = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _scrollToActiveSentence(force: true);
@@ -164,7 +165,8 @@ class _ReaderPageState extends State<ReaderPage> {
     }
 
     if (activeWordId != null &&
-        (widget.manager.isPlaying || widget.manager.isSeeking)) {
+        (widget.manager.audioManager.isPlaying ||
+            widget.manager.audioManager.isSeeking)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _scrollToActiveSentence();
       });
@@ -195,14 +197,17 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _scrollToActiveSentence({bool force = false}) {
-    if ((!force && !widget.manager.isPlaying && !widget.manager.isSeeking) ||
+    if ((!force &&
+            !widget.manager.audioManager.isPlaying &&
+            !widget.manager.audioManager.isSeeking) ||
         !_textScrollController.hasClients) {
       return;
     }
 
     final activeWordId =
         widget.manager.activeWordId ??
-        _nearestWordForPosition(widget.manager.position)?.id;
+        _nearestWordForPosition(widget.manager.audioManager.displayPosition)
+            ?.id;
     if (activeWordId == null) return;
 
     final sentenceKey = _wordSentenceKeys[activeWordId];

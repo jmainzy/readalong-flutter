@@ -1,15 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:readalong/managers/text_manager.dart';
+import 'package:readalong/managers/audio_manager.dart';
 
 class SpeedButton extends StatefulWidget {
-  final Manager manager;
+  final AudioManager manager;
   final ValueChanged<double>? onSpeedChanged;
 
-  const SpeedButton({
-    super.key,
-    required this.manager,
-    this.onSpeedChanged,
-  });
+  const SpeedButton({super.key, required this.manager, this.onSpeedChanged});
   @override
   State<SpeedButton> createState() => _SpeedButtonState();
 }
