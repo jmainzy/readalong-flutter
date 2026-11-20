@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/rendering.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -420,6 +421,85 @@ void main() {
     await controller.dispose();
   });
 
+  testWidgets('indexed word taps report bounds and preserve audio playback', (
+    tester,
+  ) async {
+    final controller = _TestPlaybackController();
+    String? tappedWord;
+    Rect? tappedBounds;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: 500,
+          child: ReadAlong(
+            xml: _sampleXml,
+            playbackController: controller,
+            indexedWords: const {'hello'},
+            indexedWordColor: Colors.purple,
+            onWordTap: (word, bounds) {
+              tappedWord = word;
+              tappedBounds = bounds;
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final finder = find.byWidgetPredicate(
+      (widget) =>
+          widget is RichText && widget.text.toPlainText() == 'Hello, world!',
+    );
+    final text =
+        tester
+                .widget<Text>(
+                  find.byWidgetPredicate(
+                    (widget) =>
+                        widget is Text &&
+                        widget.textSpan?.toPlainText() == 'Hello, world!',
+                  ),
+                )
+                .textSpan
+            as TextSpan;
+    expect((text.children!.first as TextSpan).style!.color, Colors.purple);
+    expect((text.children![2] as TextSpan).style!.color, isNull);
+    final tap = tester.getTopLeft(finder) + const Offset(5, 10);
+    await tester.tapAt(tap);
+    await tester.pump();
+    expect(tappedWord, 'Hello');
+    expect(tappedBounds!.contains(tap), isTrue);
+    expect(tappedBounds!.width, lessThan(tester.getSize(finder).width));
+    expect(controller.seekPositions, [const Duration(milliseconds: 250)]);
+    expect(controller.playCount, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await controller.dispose();
+  });
+
+  testWidgets('indexed words can be tapped without audio', (tester) async {
+    String? tappedWord;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ReadAlong(
+          xml: _sampleXml,
+          indexedWords: const {'WORLD'},
+          onWordTap: (word, _) => tappedWord = word,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final finder = find.byWidgetPredicate(
+      (widget) =>
+          widget is RichText && widget.text.toPlainText() == 'Hello, world!',
+    );
+    final render = tester.renderObject<RenderParagraph>(finder);
+    final box = render
+        .getBoxesForSelection(
+          const TextSelection(baseOffset: 7, extentOffset: 12),
+        )
+        .single;
+    await tester.tapAt(render.localToGlobal(box.toRect().center));
+    expect(tappedWord, 'world');
+  });
+
   testWidgets('tapping sentence punctuation seeks to its first aligned word', (
     tester,
   ) async {
@@ -482,6 +562,47 @@ void main() {
       expect(pageController.page, closeTo(0, 0.01));
     },
   );
+
+  for (final (initialPosition, drag, text, targetPage, targetPosition) in [
+    (Duration.zero, -500.0, 'Second page.', 1, const Duration(seconds: 5)),
+    (const Duration(seconds: 5), 500.0, 'First page.', 0, Duration.zero),
+  ]) {
+    testWidgets('paused page turn to page $targetPage stays after a word tap', (
+      tester,
+    ) async {
+      final controller = _DelayedSeekPlaybackController(
+        initialPosition: initialPosition,
+      );
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SizedBox(
+            height: 500,
+            child: ReadAlong(
+              xml: _twoAlignedPageXml,
+              playbackController: controller,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final pageView = find.byType(PageView);
+      final pageController = tester.widget<PageView>(pageView).controller!;
+      await tester.drag(pageView, Offset(drag, 0));
+      await tester.pumpAndSettle();
+      expect(pageController.page, closeTo(targetPage, 0.01));
+
+      await tester.tap(find.textContaining(text));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(pageController.page, closeTo(targetPage, 0.01));
+
+      controller.completeSeek();
+      await tester.pumpAndSettle();
+      expect(pageController.page, closeTo(targetPage, 0.01));
+      expect(controller.seekPositions, [targetPosition]);
+      expect(controller.playCount, 1);
+    });
+  }
 
   testWidgets('scrubbing follows the highlighted word across pages', (
     tester,
@@ -649,6 +770,76 @@ void main() {
     await tester.pumpAndSettle();
     expect(audioManager.speed, 1.5);
     expect(changedSpeeds, contains(1.5));
+  });
+
+  testWidgets('audio timeline updates when duration and position arrive', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final controller = _TestPlaybackController(duration: null);
+    final audioManager = AudioManager(playbackController: controller);
+    final textManager = TextManager(
+      xml: _sampleXml,
+      xmlAsset: null,
+      audioManager: audioManager,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(audioManager.dispose);
+    addTearDown(textManager.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AudioPlayerWidget(
+            manager: audioManager,
+            textManager: textManager,
+          ),
+        ),
+      ),
+    );
+    expect(find.text('--:--'), findsOneWidget);
+    expect(tester.widget<Slider>(find.byType(Slider)).onChanged, isNull);
+
+    controller.emitDuration(const Duration(seconds: 90));
+    await tester.pump();
+    expect(find.text('01:30'), findsOneWidget);
+    expect(tester.widget<Slider>(find.byType(Slider)).max, 90000);
+    expect(tester.widget<Slider>(find.byType(Slider)).onChanged, isNotNull);
+
+    controller.emitPosition(const Duration(seconds: 12));
+    await tester.pump();
+    expect(find.text('00:12'), findsOneWidget);
+    expect(tester.widget<Slider>(find.byType(Slider)).value, 12000);
+
+    audioManager.progressNotifier.update(current: const Duration(seconds: 20));
+    await tester.pump();
+    expect(find.text('00:20'), findsOneWidget);
+    expect(tester.widget<Slider>(find.byType(Slider)).value, 20000);
+
+    await audioManager.beginSeek();
+    audioManager.updateSeekPreviewMilliseconds(34000);
+    await tester.pump();
+    expect(find.text('00:34'), findsOneWidget);
+    expect(tester.widget<Slider>(find.byType(Slider)).value, 34000);
+    expect(audioManager.position, const Duration(seconds: 20));
+    await audioManager.endSeek(34000);
+    await tester.pump();
+    expect(audioManager.position, const Duration(seconds: 34));
+
+    controller.emitState(PlayerState(false, ProcessingState.buffering));
+    await tester.pump();
+    expect(tester.widget<Slider>(find.byType(Slider)).onChanged, isNull);
+    controller.emitState(PlayerState(false, ProcessingState.ready));
+    await tester.pump();
+    expect(tester.widget<Slider>(find.byType(Slider)).onChanged, isNotNull);
+
+    controller.emitDuration(null);
+    await tester.pump();
+    expect(find.text('--:--'), findsOneWidget);
+    expect(tester.widget<Slider>(find.byType(Slider)).onChanged, isNull);
   });
 
   testWidgets('audio controls show title, full-width timeline, and actions', (
@@ -1482,6 +1673,21 @@ class _CompletedReplayAudioPlayer extends just_audio.AudioPlayer {
   }
 }
 
+class _DelayedSeekPlaybackController extends _TestPlaybackController {
+  _DelayedSeekPlaybackController({required super.initialPosition})
+    : super(duration: const Duration(seconds: 10));
+
+  final Completer<void> _seekGate = Completer<void>();
+
+  void completeSeek() => _seekGate.complete();
+
+  @override
+  Future<void> seek(Duration position) async {
+    await _seekGate.future;
+    await super.seek(position);
+  }
+}
+
 class _TestPlaybackController implements PlaybackController {
   _TestPlaybackController({
     Duration initialPosition = Duration.zero,
@@ -1498,7 +1704,7 @@ class _TestPlaybackController implements PlaybackController {
 
   Duration _position = Duration.zero;
   @override
-  final Duration duration;
+  Duration? duration;
   PlayerState _state = PlayerState(false, ProcessingState.ready);
   int playCount = 0;
   int pauseCount = 0;
@@ -1532,6 +1738,11 @@ class _TestPlaybackController implements PlaybackController {
   void emitPosition(Duration position) {
     _position = position;
     _positions.add(position);
+  }
+
+  void emitDuration(Duration? value) {
+    duration = value;
+    _durations.add(value);
   }
 
   @override

@@ -21,10 +21,7 @@ class AudioManager extends ChangeNotifier {
     _ownsAudioPlayer = audioPlayer == null && playbackController == null;
     _playbackController =
         playbackController ?? _JustAudioPlaybackController(_player);
-    _position = _playbackController.position;
-    _duration = _playbackController.duration;
-    _speed = _playbackController.speed;
-    _updatePlaybackState(_playbackController.state);
+    _syncFromController();
     _bindPlaybackController();
     if (!_hasExternalPlaybackController) unawaited(_configureAudioSource());
   }
@@ -41,8 +38,7 @@ class AudioManager extends ChangeNotifier {
   int? _nextPlayPositionMilliseconds;
   Duration? _wordPlaybackEnd;
   Duration? _seekPreviewPosition;
-  Duration _position = Duration.zero;
-  Duration? _duration;
+  final ProgressNotifier progressNotifier = ProgressNotifier();
   double _speed = 1;
   Object? _audioError;
   bool _isSeeking = false;
@@ -53,9 +49,10 @@ class AudioManager extends ChangeNotifier {
   StreamSubscription<Duration?>? _durationSubscription;
   StreamSubscription<PlayerState>? _playerStateSubscription;
 
-  Duration get position => _position;
-  Duration get displayPosition => _seekPreviewPosition ?? _position;
-  Duration? get duration => _duration;
+  Duration get position => progressNotifier.value.current;
+  Duration get displayPosition =>
+      _seekPreviewPosition ?? progressNotifier.value.current;
+  Duration? get duration => progressNotifier.value.total;
   double get speed => _speed;
   Object? get audioError => _audioError;
   bool get isPlaying => _playbackController.state.playing;
@@ -119,8 +116,11 @@ class AudioManager extends ChangeNotifier {
       if (_disposed || configuration != _configuration) return;
       _hasConfiguredAudio = false;
       _audioError = stopError;
-      _duration = null;
-      _position = Duration.zero;
+      progressNotifier.value = const ProgressBarState(
+        current: Duration.zero,
+        buffered: Duration.zero,
+        total: null,
+      );
       _setButtonState(ButtonState.paused);
       notifyListeners();
       return;
@@ -134,8 +134,10 @@ class AudioManager extends ChangeNotifier {
       final duration = await _player.setAudioSource(source);
       if (_disposed || configuration != _configuration) return;
       _hasConfiguredAudio = true;
-      _duration = duration;
-      _position = Duration.zero;
+      progressNotifier.update(
+        current: Duration.zero,
+        total: duration ?? _playbackController.duration,
+      );
       _setButtonState(ButtonState.paused);
       notifyListeners();
     } catch (error) {
@@ -147,8 +149,11 @@ class AudioManager extends ChangeNotifier {
   }
 
   void _syncFromController() {
-    _duration = _playbackController.duration;
-    _position = _playbackController.position;
+    progressNotifier.value = ProgressBarState(
+      current: _playbackController.position,
+      buffered: Duration.zero,
+      total: _playbackController.duration,
+    );
     _speed = _playbackController.speed;
     _updatePlaybackState(_playbackController.state);
   }
@@ -181,19 +186,25 @@ class AudioManager extends ChangeNotifier {
     if (_disposed || _isSeeking) return;
     final end = _wordPlaybackEnd;
     if (end != null && position >= end) {
-      _position = end;
+      progressNotifier.update(current: end);
       unawaited(_finishWordPlayback(end, _operationGeneration));
       notifyListeners();
       return;
     }
-    _position = position;
+    progressNotifier.update(current: position);
     notifyListeners();
   }
 
   void _updateDuration(Duration? duration) {
     if (_disposed) return;
-    _duration = duration;
-    if (duration != null && _position > duration) _position = duration;
+    final progress = progressNotifier.value;
+    progressNotifier.value = ProgressBarState(
+      current: duration != null && progress.current > duration
+          ? duration
+          : progress.current,
+      buffered: progress.buffered,
+      total: duration,
+    );
     notifyListeners();
   }
 
@@ -216,8 +227,8 @@ class AudioManager extends ChangeNotifier {
           : ButtonState.paused,
     );
     if (state.processingState == ProcessingState.completed &&
-        _duration != null) {
-      _position = _duration!;
+        duration != null) {
+      progressNotifier.update(current: duration);
     }
     _speed = _playbackController.speed;
     notifyListeners();
@@ -249,12 +260,11 @@ class AudioManager extends ChangeNotifier {
         final start = Duration(milliseconds: requestedStart);
         await _playbackController.seek(start);
         if (_disposed || generation != _operationGeneration) return;
-        _position = start;
-      } else if (isCompleted ||
-          (_duration != null && _position >= _duration!)) {
+        progressNotifier.update(current: start);
+      } else if (isCompleted || (duration != null && position >= duration!)) {
         await _playbackController.seek(Duration.zero);
         if (_disposed || generation != _operationGeneration) return;
-        _position = Duration.zero;
+        progressNotifier.update(current: Duration.zero);
       }
       await _playbackController.play();
     } catch (error) {
@@ -282,7 +292,7 @@ class AudioManager extends ChangeNotifier {
       if (_disposed || generation != _operationGeneration) return;
       await _playbackController.seek(position);
       if (_disposed || generation != _operationGeneration) return;
-      _position = position;
+      progressNotifier.update(current: position);
       notifyListeners();
     } catch (error) {
       _handleAudioError(error);
@@ -295,7 +305,7 @@ class AudioManager extends ChangeNotifier {
     _nextPlayPositionMilliseconds = null;
     try {
       await _playbackController.stop();
-      _position = Duration.zero;
+      progressNotifier.update(current: Duration.zero);
       notifyListeners();
     } catch (error) {
       _handleAudioError(error);
@@ -310,7 +320,7 @@ class AudioManager extends ChangeNotifier {
       if (_disposed || generation != _operationGeneration) return;
       await _playbackController.seek(Duration.zero);
       if (_disposed || generation != _operationGeneration) return;
-      _position = Duration.zero;
+      progressNotifier.update(current: Duration.zero);
       await _playbackController.play();
     } catch (error) {
       _handleAudioError(error);
@@ -323,7 +333,7 @@ class AudioManager extends ChangeNotifier {
     _wordPlaybackEnd = null;
     _nextPlayPositionMilliseconds = null;
     _isSeeking = true;
-    _seekPreviewPosition = _position;
+    _seekPreviewPosition = progressNotifier.value.current;
     notifyListeners();
     if (!isPlaying) return;
     try {
@@ -350,7 +360,7 @@ class AudioManager extends ChangeNotifier {
     try {
       await _playbackController.seek(target);
       if (_disposed || generation != _operationGeneration) return;
-      _position = target;
+      progressNotifier.update(current: target);
       _isSeeking = false;
       _seekPreviewPosition = null;
       notifyListeners();
@@ -369,7 +379,7 @@ class AudioManager extends ChangeNotifier {
     try {
       await _playbackController.seek(target);
       if (_disposed || generation != _operationGeneration) return;
-      _position = target;
+      progressNotifier.update(current: target);
       notifyListeners();
     } catch (error) {
       _handleAudioError(error);
@@ -380,6 +390,10 @@ class AudioManager extends ChangeNotifier {
       seek(Duration(milliseconds: milliseconds.round()));
 
   Future<void> playWord(Duration start, Duration duration) async {
+    duration =
+        duration -
+        Duration(milliseconds: 5); // so it doesn't highlight the next word
+
     if (!canPlay || isAudioLoading) return;
     final generation = ++_operationGeneration;
     _nextPlayPositionMilliseconds = null;
@@ -396,7 +410,7 @@ class AudioManager extends ChangeNotifier {
     try {
       await _playbackController.seek(start);
       if (_disposed || generation != _operationGeneration) return;
-      _position = start + Duration(milliseconds: buffer);
+      progressNotifier.update(current: start + Duration(milliseconds: buffer));
       await _playbackController.play();
     } catch (error) {
       if (generation == _operationGeneration) {
@@ -416,7 +430,7 @@ class AudioManager extends ChangeNotifier {
       if (_disposed || generation != _operationGeneration) return;
       await _playbackController.seek(end - Duration(milliseconds: buffer));
       if (_disposed || generation != _operationGeneration) return;
-      _position = end - Duration(milliseconds: buffer);
+      progressNotifier.update(current: end - Duration(milliseconds: buffer));
       _wordPlaybackEnd = null;
       notifyListeners();
     } catch (error) {
@@ -442,9 +456,38 @@ class AudioManager extends ChangeNotifier {
     _disposed = true;
     unawaited(_cancelPlaybackSubscriptions());
     _buttonState.dispose();
+    progressNotifier.dispose();
     if (_ownsAudioPlayer) unawaited(_player.dispose());
     super.dispose();
   }
+}
+
+class ProgressNotifier extends ValueNotifier<ProgressBarState> {
+  ProgressNotifier() : super(_initialValue);
+  static const _initialValue = ProgressBarState(
+    current: Duration.zero,
+    buffered: Duration.zero,
+    total: null,
+  );
+
+  void update({Duration? current, Duration? buffered, Duration? total}) {
+    value = ProgressBarState(
+      current: current ?? value.current,
+      buffered: buffered ?? value.buffered,
+      total: total ?? value.total,
+    );
+  }
+}
+
+class ProgressBarState {
+  const ProgressBarState({
+    required this.current,
+    required this.buffered,
+    required this.total,
+  });
+  final Duration current;
+  final Duration buffered;
+  final Duration? total;
 }
 
 class _JustAudioPlaybackController implements PlaybackController {

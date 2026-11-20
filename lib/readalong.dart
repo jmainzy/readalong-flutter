@@ -42,6 +42,9 @@ class ReadAlong extends StatefulWidget {
     this.onSpeedChanged,
     this.onReaderSurfaceTap,
     this.onPositionChanged,
+    this.indexedWords = const {},
+    this.onWordTap,
+    this.indexedWordColor,
     this.showTranslations = true,
     this.textStyle,
     this.translationTextStyle,
@@ -95,6 +98,17 @@ class ReadAlong extends StatefulWidget {
   /// is null when no audio source is configured.
   final ValueChanged<ReadAlongPosition>? onPositionChanged;
 
+  /// Words to distinguish in the text, matched case-insensitively.
+  final Set<String> indexedWords;
+
+  /// Called for an indexed word with its text and bounds in global coordinates.
+  ///
+  /// Tapping an aligned word still seeks and starts playback.
+  final void Function(String word, Rect bounds)? onWordTap;
+
+  /// Foreground color for indexed words. Defaults to the theme's primary color.
+  final Color? indexedWordColor;
+
   /// Whether translation sentences in the XML should be displayed.
   final bool showTranslations;
 
@@ -121,6 +135,7 @@ class _ReadAlongState extends State<ReadAlong> {
   final PageController _pageController = PageController();
   bool _isFullscreen = false;
   int _currentPageIndex = 0;
+  int? _lastAudioPageIndex;
   int? _requestedPageIndex;
   StreamSubscription<Duration>? _audioPositionSubscription;
   final Map<String, double> _textScrollOffsets = {};
@@ -168,13 +183,11 @@ class _ReadAlongState extends State<ReadAlong> {
     }
     if (oldWidget.xml != widget.xml || oldWidget.xmlAsset != widget.xmlAsset) {
       _currentPageIndex = 0;
+      _lastAudioPageIndex = null;
       _requestedPageIndex = null;
       if (_pageController.hasClients) _pageController.jumpToPage(0);
       unawaited(
-        _textManager.updateSources(
-          xml: widget.xml,
-          xmlAsset: widget.xmlAsset,
-        ),
+        _textManager.updateSources(xml: widget.xml, xmlAsset: widget.xmlAsset),
       );
     }
     if (oldWidget.audioSource != widget.audioSource ||
@@ -287,6 +300,9 @@ class _ReadAlongState extends State<ReadAlong> {
                     textStyle: widget.textStyle,
                     showTranslations: widget.showTranslations,
                     highlightColor: widget.highlightColor,
+                    indexedWords: widget.indexedWords,
+                    indexedWordColor: widget.indexedWordColor,
+                    onWordTap: widget.onWordTap,
                     onBackgroundTap: widget.onReaderSurfaceTap,
                     onTextScrollOffsetChanged: (offset) =>
                         _updateTextScrollOffset(page.id, offset),
@@ -356,6 +372,14 @@ class _ReadAlongState extends State<ReadAlong> {
     final targetPageIndex = _textManager.pageIndexForPosition(
       _audioManager.displayPosition,
     );
+    final previousAudioPageIndex = _lastAudioPageIndex;
+    _lastAudioPageIndex = targetPageIndex;
+    // A word highlight can notify listeners before its audio seek completes.
+    if (targetPageIndex == previousAudioPageIndex &&
+        !_audioManager.isPlaying &&
+        !_audioManager.isSeeking) {
+      return;
+    }
     if (targetPageIndex != _currentPageIndex) {
       if (_pageController.hasClients) {
         _changePage(targetPageIndex);

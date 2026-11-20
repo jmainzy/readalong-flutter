@@ -12,6 +12,9 @@ class ReaderPage extends StatefulWidget {
   final TextStyle? textStyle;
   final bool showTranslations;
   final Color? highlightColor;
+  final Set<String> indexedWords;
+  final Color? indexedWordColor;
+  final void Function(String word, Rect bounds)? onWordTap;
   final String? imageUri;
   final VoidCallback? onBackgroundTap;
   final ValueChanged<double>? onTextScrollOffsetChanged;
@@ -29,6 +32,9 @@ class ReaderPage extends StatefulWidget {
     this.textStyle,
     this.showTranslations = true,
     this.highlightColor,
+    this.indexedWords = const {},
+    this.indexedWordColor,
+    this.onWordTap,
     this.imageUri,
     this.onBackgroundTap,
     this.onTextScrollOffsetChanged,
@@ -40,7 +46,7 @@ class ReaderPage extends StatefulWidget {
 
 class _ReaderPageState extends State<ReaderPage> {
   ReadAlongPage get page => widget.page;
-  final Map<String, TapGestureRecognizer> _wordRecognizers = {};
+  final Map<ReadAlongWord, TapGestureRecognizer> _wordRecognizers = {};
   final Map<String, GlobalKey> _sentenceKeys = {};
   final Map<String, GlobalKey> _wordSentenceKeys = {};
   final GlobalKey _textViewportKey = GlobalKey();
@@ -83,7 +89,7 @@ class _ReaderPageState extends State<ReaderPage> {
       widget.manager.addListener(_handleManagerChanged);
       _lastActiveWordId = widget.manager.activeWordId;
     }
-    if (oldWidget.page.id != widget.page.id ||
+    if (oldWidget.page != widget.page ||
         oldWidget.manager != widget.manager ||
         oldWidget.audioEnabled != widget.audioEnabled) {
       _disposeWordRecognizers();
@@ -431,24 +437,19 @@ class _ReaderPageState extends State<ReaderPage> {
           for (final (sentenceIndex, sentence) in sentences.indexed)
             GestureDetector(
               behavior: HitTestBehavior.translucent,
-              onTap: widget.audioEnabled
-                  ? () => _playSentence(sentence)
-                  : null,
+              onTap: widget.audioEnabled ? () => _playSentence(sentence) : null,
               child: Text.rich(
                 key: _sentenceKeys.putIfAbsent(
                   '$paragraphIndex:$sentenceIndex',
                   GlobalKey.new,
                 ),
                 TextSpan(
-                  children: [
-                    for (final segment in sentence.segments)
-                      _buildPositionedTextSpan(
-                        context,
-                        segment,
-                        paragraphIndex,
-                        sentenceIndex,
-                      ),
-                  ],
+                  children: _buildSentenceSpans(
+                    context,
+                    sentence,
+                    paragraphIndex,
+                    sentenceIndex,
+                  ),
                 ),
                 style: sentence.isTranslation
                     ? widget.translationTextStyle ??
@@ -473,8 +474,7 @@ class _ReaderPageState extends State<ReaderPage> {
     ReadAlongWord? firstAlignedWord;
     for (final word in sentence.segments.whereType<ReadAlongWord>()) {
       if (!word.isAligned) continue;
-      if (firstAlignedWord == null ||
-          word.start! < firstAlignedWord.start!) {
+      if (firstAlignedWord == null || word.start! < firstAlignedWord.start!) {
         firstAlignedWord = word;
       }
     }
@@ -483,40 +483,93 @@ class _ReaderPageState extends State<ReaderPage> {
     }
   }
 
-  TextSpan _buildPositionedTextSpan(
+  List<TextSpan> _buildSentenceSpans(
     BuildContext context,
-    ReadAlongSegment segment,
+    ReadAlongSentence sentence,
     int paragraphIndex,
     int sentenceIndex,
   ) {
     final sentenceKey = _sentenceKeys['$paragraphIndex:$sentenceIndex']!;
-    if (segment is ReadAlongWord) {
-      _wordSentenceKeys[segment.id] = sentenceKey;
+    var offset = 0;
+    final spans = <TextSpan>[];
+    for (final segment in sentence.segments) {
+      if (segment is ReadAlongWord) {
+        _wordSentenceKeys[segment.id] = sentenceKey;
+      }
+      spans.add(_buildTextSpan(context, segment, sentenceKey, offset));
+      offset += segment.text.length;
     }
-    return _buildTextSpan(context, segment);
+    return spans;
   }
 
-  TextSpan _buildTextSpan(BuildContext context, ReadAlongSegment segment) {
+  TextSpan _buildTextSpan(
+    BuildContext context,
+    ReadAlongSegment segment,
+    GlobalKey sentenceKey,
+    int start,
+  ) {
     if (segment is! ReadAlongWord) {
       return TextSpan(text: segment.text);
     }
 
     final isActive = segment.id == widget.manager.activeWordId;
     final aligned = segment.isAligned;
-    final recognizer = aligned && widget.audioEnabled
-        ? _wordRecognizers.putIfAbsent(
-            segment.id,
-            () =>
-                TapGestureRecognizer()
-                  ..onTap = () =>
-                      unawaited(widget.manager.playWordById(segment.id)),
-          )
+    final indexed = widget.indexedWords.any(
+      (word) => word.toLowerCase() == segment.text.trim().toLowerCase(),
+    );
+    final recognizer =
+        (aligned && widget.audioEnabled) ||
+            (indexed && widget.onWordTap != null)
+        ? _wordRecognizers.putIfAbsent(segment, TapGestureRecognizer.new)
         : null;
+    Offset? tapPosition;
+    recognizer?.onTapUp = (details) => tapPosition = details.globalPosition;
+    recognizer?.onTap = () {
+      if (aligned && widget.audioEnabled) {
+        unawaited(widget.manager.playWordById(segment.id));
+      }
+      if (indexed && widget.onWordTap != null) {
+        final render = sentenceKey.currentContext?.findRenderObject();
+        if (render is RenderParagraph) {
+          final boxes = render.getBoxesForSelection(
+            TextSelection(
+              baseOffset: start,
+              extentOffset: start + segment.text.length,
+            ),
+          );
+          if (boxes.isNotEmpty) {
+            final localTap = tapPosition == null
+                ? null
+                : render.globalToLocal(tapPosition!);
+            final box =
+                boxes
+                    .where(
+                      (box) =>
+                          localTap != null && box.toRect().contains(localTap),
+                    )
+                    .firstOrNull ??
+                boxes.first;
+            final rect = box.toRect();
+            widget.onWordTap!(
+              segment.text,
+              Rect.fromPoints(
+                render.localToGlobal(rect.topLeft),
+                render.localToGlobal(rect.bottomRight),
+              ),
+            );
+          }
+        }
+      }
+      tapPosition = null;
+    };
 
     return TextSpan(
       text: segment.text,
       recognizer: recognizer,
       style: TextStyle(
+        color: indexed
+            ? widget.indexedWordColor ?? Theme.of(context).colorScheme.primary
+            : null,
         backgroundColor: isActive
             ? widget.highlightColor ??
                   Theme.of(context).colorScheme.primaryContainer

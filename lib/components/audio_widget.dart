@@ -43,19 +43,22 @@ class AudioPlayerWidget extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
           children: [
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: _buildProgressSlider(),
+              child: ProgressBar(manager: manager),
             ),
             if (MediaQuery.orientationOf(context) == Orientation.portrait)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: _buildTimestamps(context),
-              )
-            else
-              Container(),
+                child: AnimatedBuilder(
+                  animation: Listenable.merge([
+                    manager,
+                    manager.progressNotifier,
+                  ]),
+                  builder: (context, _) => _buildTimestamps(context),
+                ),
+              ),
             Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -178,30 +181,6 @@ class AudioPlayerWidget extends StatelessWidget {
     return '$minutes:$seconds';
   }
 
-  Widget _buildProgressSlider() {
-    final totalMilliseconds = manager.duration?.inMilliseconds ?? 0;
-    final value = totalMilliseconds == 0
-        ? 0.0
-        : manager.displayPosition.inMilliseconds
-              .clamp(0, totalMilliseconds)
-              .toDouble();
-
-    return Slider(
-      value: value,
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-      max: totalMilliseconds > 0 ? totalMilliseconds.toDouble() : 1,
-      onChangeStart: totalMilliseconds == 0 || manager.isAudioLoading
-          ? null
-          : (_) => unawaited(manager.beginSeek()),
-      onChanged: totalMilliseconds == 0 || manager.isAudioLoading
-          ? null
-          : manager.updateSeekPreviewMilliseconds,
-      onChangeEnd: totalMilliseconds == 0 || manager.isAudioLoading
-          ? null
-          : manager.endSeek,
-    );
-  }
-
   Widget _buildTimestamps(BuildContext context) {
     final style = Theme.of(context).textTheme.labelSmall
         ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant);
@@ -220,6 +199,46 @@ class AudioPlayerWidget extends StatelessWidget {
   }
 }
 
+class ProgressBar extends StatelessWidget {
+  final AudioManager manager;
+  const ProgressBar({super.key, required this.manager});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<ProgressBarState>(
+      valueListenable: manager.progressNotifier,
+      builder: (context, progress, _) {
+        return AnimatedBuilder(
+          animation: manager,
+          builder: (context, _) {
+            final totalMilliseconds = progress.total?.inMilliseconds ?? 0;
+            final value = totalMilliseconds == 0
+                ? 0.0
+                : manager.displayPosition.inMilliseconds
+                      .clamp(0, totalMilliseconds)
+                      .toDouble();
+
+            return Slider(
+              value: value,
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              max: totalMilliseconds > 0 ? totalMilliseconds.toDouble() : 1,
+              onChangeStart: totalMilliseconds == 0 || manager.isAudioLoading
+                  ? null
+                  : (_) => unawaited(manager.beginSeek()),
+              onChanged: totalMilliseconds == 0 || manager.isAudioLoading
+                  ? null
+                  : manager.updateSeekPreviewMilliseconds,
+              onChangeEnd: totalMilliseconds == 0 || manager.isAudioLoading
+                  ? null
+                  : manager.endSeek,
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
 class PlayButton extends StatelessWidget {
   const PlayButton({super.key, required this.manager, this.onReplay});
   final AudioManager manager;
@@ -230,8 +249,8 @@ class PlayButton extends StatelessWidget {
     double size = 42.0;
     return ValueListenableBuilder<ButtonState>(
       valueListenable: manager.buttonState,
-      builder: (context, value, _) {
-        switch (value) {
+      builder: (context, state, _) {
+        switch (state) {
           case ButtonState.playingLoading:
           case ButtonState.pausedLoading:
             return Container(

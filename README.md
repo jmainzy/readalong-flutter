@@ -13,6 +13,7 @@ This is just a widget, you'll need to import it into a full Flutter app yourself
 - Play an audio source, seek by tapping aligned words, and highlight the word at the current playback position.
 - Synchronize reading controls and sentence highlighting with an external audio or video player.
 - Load XML directly or from a Flutter asset.
+- Highlight indexed words and report taps and their screen bounds to the host.
 
 ## Install
 
@@ -91,6 +92,21 @@ The external controller should emit position updates frequently enough for
 sentence highlighting and should report `isCompleted` when playback ends.
 `audioSource` and `playbackController` are mutually exclusive.
 
+### Indexed words
+
+Supply words to highlight and use the global bounds to anchor host-provided UI.
+Matching is case-insensitive; aligned words retain their normal audio behavior.
+
+```dart
+ReadAlong(
+  xmlAsset: 'assets/story.readalong',
+  indexedWords: definitions.keys.toSet(),
+  onWordTap: (word, bounds) {
+    // Show the host's definition widget at bounds.
+  },
+)
+```
+
 ## Full API
 
 | Option                 | Type                               | Default | Description                                                                                                                                                                                            |
@@ -106,6 +122,9 @@ sentence highlighting and should report `isCompleted` when playback ends.
 | `onSpeedChanged`       | `ValueChanged<double>?`            | `null`  | Called when the user changes playback speed; receives the speed multiplier.                                                                                                                            |
 | `onReaderSurfaceTap`   | `VoidCallback?`                    | `null`  | Called when the reader's image or blank text area is tapped.                                                                                                                                           |
 | `onPositionChanged`    | `ValueChanged<ReadAlongPosition>?` | `null`  | Receives reading-position updates and a final snapshot immediately before disposal. The snapshot contains page ID/index, text scroll offset, active word ID, and playback position when playback is enabled.    |
+| `indexedWords`         | `Set<String>`                      | `{}`    | Words highlighted using case-insensitive matching. |
+| `onWordTap`            | `void Function(String, Rect)?`     | `null`  | Called for an indexed word with its displayed text and global bounding rectangle. |
+| `indexedWordColor`     | `Color?`                           | `null`  | Foreground color for indexed words; defaults to the theme's primary color. |
 | `showTranslations`     | `bool`                             | `true`  | Whether to show translation sentences marked with `class="translation"`.                                                                                                                               |
 | `textStyle`            | `TextStyle?`                       | `null`  | Optional style for the main document text. Uses the theme's larger body style by default.                                                                                                              |
 | `translationTextStyle` | `TextStyle?`                       | `null`  | Optional style for translations. Uses smaller, lighter grey text by default.                                                                                                                           |
