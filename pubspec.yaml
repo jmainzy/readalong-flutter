@@ -12,6 +12,7 @@ dependencies:
     sdk: flutter
   just_audio: ^0.9.33
   xml: ^7.1.0
+  unorm_dart: ^0.3.3
 
   material_ui: any
 dev_dependencies:

@@ -90,9 +90,7 @@ class ReadalongParser {
       (element) => element.name.local == 'TIME_SLOT',
     );
     final timeSlots = <String, Duration>{};
-    final timeUnits = root
-        .getElement('HEADER')
-        ?.getAttribute('TIME_UNITS');
+    final timeUnits = root.getElement('HEADER')?.getAttribute('TIME_UNITS');
     final millisecondsPerUnit = switch (timeUnits) {
       'seconds' => 1000.0,
       'milliseconds' || null => 1.0,
@@ -205,13 +203,12 @@ class ReadalongParser {
             id: annotationId,
             start: start,
             duration: end - start,
+            isElanAnnotation: true,
           ),
         ],
       );
       paragraphs.add(
-        ReadAlongParagraph(
-          sentences: [sentence, ...?translations[id]],
-        ),
+        ReadAlongParagraph(sentences: [sentence, ...?translations[id]]),
       );
     }
 

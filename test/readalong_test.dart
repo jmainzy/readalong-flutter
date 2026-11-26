@@ -500,6 +500,154 @@ void main() {
     expect(tappedWord, 'world');
   });
 
+  testWidgets('indexed ELAN phrase words open without seeking', (tester) async {
+    final controller = _TestPlaybackController();
+    final words = <String>[];
+    final bounds = <Rect>[];
+    const surface = 'He\u0304sci';
+    final xml = _elanXml.replaceFirst('Hēsci', surface);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: 500,
+          child: ReadAlong(
+            xml: xml,
+            playbackController: controller,
+            indexedWords: const {'hēsci', 'hiyowat'},
+            indexedWordColor: Colors.purple,
+            onWordTap: (word, rect) {
+              words.add(word);
+              bounds.add(rect);
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final fullText = '$surface! Hiyowat.';
+    final finder = find.byWidgetPredicate(
+      (widget) => widget is RichText && widget.text.toPlainText() == fullText,
+    );
+    final render = tester.renderObject<RenderParagraph>(finder);
+    final text = tester.widget<Text>(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Text && widget.textSpan?.toPlainText() == fullText,
+      ),
+    );
+    final annotation = (text.textSpan as TextSpan).children!.first as TextSpan;
+    expect(
+      (annotation.children!.first as TextSpan).style?.color,
+      Colors.purple,
+    );
+
+    final firstBox = render
+        .getBoxesForSelection(
+          TextSelection(baseOffset: 0, extentOffset: surface.length),
+        )
+        .first;
+    final firstTap = render.localToGlobal(firstBox.toRect().center);
+    await tester.tapAt(firstTap);
+    await tester.pump();
+    expect(words, ['Hēsci']);
+    expect(bounds.single.contains(firstTap), isTrue);
+    expect(controller.seekPositions, isEmpty);
+    expect(controller.playCount, 0);
+
+    final secondStart = fullText.indexOf('Hiyowat');
+    final secondBox = render
+        .getBoxesForSelection(
+          TextSelection(baseOffset: secondStart, extentOffset: secondStart + 7),
+        )
+        .first;
+    await tester.tapAt(render.localToGlobal(secondBox.toRect().center));
+    await tester.pump();
+    expect(words, ['Hēsci', 'Hiyowat']);
+    expect(controller.seekPositions, isEmpty);
+    expect(controller.playCount, 0);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await controller.dispose();
+  });
+
+  testWidgets('a single-word ELAN annotation seeks when indexed', (
+    tester,
+  ) async {
+    final controller = _TestPlaybackController();
+    String? tapped;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: 500,
+          child: ReadAlong(
+            xml: _elanXml.replaceFirst('Hēsci! Hiyowat.', 'Hēsci!'),
+            playbackController: controller,
+            indexedWords: const {'hēsci'},
+            onWordTap: (word, _) => tapped = word,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final finder = find.byWidgetPredicate(
+      (widget) => widget is RichText && widget.text.toPlainText() == 'Hēsci!',
+    );
+    final render = tester.renderObject<RenderParagraph>(finder);
+    final box = render
+        .getBoxesForSelection(
+          const TextSelection(baseOffset: 0, extentOffset: 5),
+        )
+        .first;
+    await tester.tapAt(render.localToGlobal(box.toRect().center));
+    await tester.pump();
+    expect(tapped, 'Hēsci');
+    expect(controller.seekPositions, [const Duration(milliseconds: 1250)]);
+    expect(controller.playCount, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await controller.dispose();
+  });
+
+  testWidgets('an indexed unaligned word opens without seeking', (
+    tester,
+  ) async {
+    final controller = _TestPlaybackController();
+    String? tapped;
+    final xml = _sampleXml.replaceFirst(
+      'id="word-1" time="0.25" dur="0.5"',
+      'id="word-1"',
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: 500,
+          child: ReadAlong(
+            xml: xml,
+            playbackController: controller,
+            indexedWords: const {'hello'},
+            onWordTap: (word, _) => tapped = word,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final finder = find.byWidgetPredicate(
+      (widget) =>
+          widget is RichText && widget.text.toPlainText() == 'Hello, world!',
+    );
+    final render = tester.renderObject<RenderParagraph>(finder);
+    final box = render
+        .getBoxesForSelection(
+          const TextSelection(baseOffset: 0, extentOffset: 5),
+        )
+        .first;
+    await tester.tapAt(render.localToGlobal(box.toRect().center));
+    await tester.pump();
+    expect(tapped, 'Hello');
+    expect(controller.seekPositions, isEmpty);
+    expect(controller.playCount, 0);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await controller.dispose();
+  });
+
   testWidgets('tapping sentence punctuation seeks to its first aligned word', (
     tester,
   ) async {

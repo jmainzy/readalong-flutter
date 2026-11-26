@@ -98,12 +98,13 @@ class ReadAlong extends StatefulWidget {
   /// is null when no audio source is configured.
   final ValueChanged<ReadAlongPosition>? onPositionChanged;
 
-  /// Words to distinguish in the text, matched case-insensitively.
+  /// Words to distinguish in the text, matched case-insensitively in NFC.
   final Set<String> indexedWords;
 
   /// Called for an indexed word with its text and bounds in global coordinates.
   ///
-  /// Tapping an aligned word still seeks and starts playback.
+  /// Tapping an aligned word still seeks and starts playback. Words inside a
+  /// multiword ELAN annotation have no word-level timing and do not seek.
   final void Function(String word, Rect bounds)? onWordTap;
 
   /// Foreground color for indexed words. Defaults to the theme's primary color.

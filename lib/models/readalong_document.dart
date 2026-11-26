@@ -72,11 +72,13 @@ class ReadAlongWord extends ReadAlongSegment {
     required this.id,
     required this.start,
     required this.duration,
+    this.isElanAnnotation = false,
   });
 
   final String id;
   final Duration? start;
   final Duration? duration;
+  final bool isElanAnnotation;
 
   bool get isAligned => start != null && duration != null;
 }

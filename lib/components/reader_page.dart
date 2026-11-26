@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/rendering.dart';
 import 'package:readalong/managers/text_manager.dart';
 import 'package:readalong/models/readalong_document.dart';
+import 'package:unorm_dart/unorm_dart.dart' as unorm;
 
 class ReaderPage extends StatefulWidget {
   final ReadAlongPage page;
@@ -46,7 +47,12 @@ class ReaderPage extends StatefulWidget {
 
 class _ReaderPageState extends State<ReaderPage> {
   ReadAlongPage get page => widget.page;
-  final Map<ReadAlongWord, TapGestureRecognizer> _wordRecognizers = {};
+  final Map<(ReadAlongWord, int), TapGestureRecognizer> _wordRecognizers = {};
+  late Set<String> _indexedWords;
+  static final _wordPattern = RegExp(
+    r"[\p{L}\p{M}\p{N}]+(?:[-'’][\p{L}\p{M}\p{N}]+)*",
+    unicode: true,
+  );
   final Map<String, GlobalKey> _sentenceKeys = {};
   final Map<String, GlobalKey> _wordSentenceKeys = {};
   final GlobalKey _textViewportKey = GlobalKey();
@@ -63,6 +69,7 @@ class _ReaderPageState extends State<ReaderPage> {
   @override
   void initState() {
     super.initState();
+    _updateIndexedWords();
     _lastActiveWordId = widget.manager.activeWordId;
     widget.manager.addListener(_handleManagerChanged);
     _textScrollController.addListener(_reportTextScrollOffset);
@@ -84,11 +91,15 @@ class _ReaderPageState extends State<ReaderPage> {
   @override
   void didUpdateWidget(covariant ReaderPage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.indexedWords != widget.indexedWords) {
+      _updateIndexedWords();
+    }
     if (oldWidget.manager != widget.manager) {
       oldWidget.manager.removeListener(_handleManagerChanged);
       widget.manager.addListener(_handleManagerChanged);
       _lastActiveWordId = widget.manager.activeWordId;
     }
+
     if (oldWidget.page != widget.page ||
         oldWidget.manager != widget.manager ||
         oldWidget.audioEnabled != widget.audioEnabled) {
@@ -107,6 +118,12 @@ class _ReaderPageState extends State<ReaderPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _scrollToActiveSentence();
     });
+  }
+
+  void _updateIndexedWords() {
+    _indexedWords = widget.indexedWords
+        .map((word) => unorm.nfc(word.trim().toLowerCase()))
+        .toSet();
   }
 
   @override
@@ -513,19 +530,119 @@ class _ReaderPageState extends State<ReaderPage> {
     }
 
     final isActive = segment.id == widget.manager.activeWordId;
+    if (segment.isElanAnnotation) {
+      return _buildElanSpan(context, segment, sentenceKey, start, isActive);
+    }
     final aligned = segment.isAligned;
-    final indexed = widget.indexedWords.any(
-      (word) => word.toLowerCase() == segment.text.trim().toLowerCase(),
+    final indexed = _indexedWords.contains(
+      unorm.nfc(segment.text.trim().toLowerCase()),
     );
     final recognizer =
         (aligned && widget.audioEnabled) ||
             (indexed && widget.onWordTap != null)
-        ? _wordRecognizers.putIfAbsent(segment, TapGestureRecognizer.new)
+        ? _wordRecognizer(
+            segment,
+            sentenceKey,
+            start,
+            0,
+            segment.text.length,
+            unorm.nfc(segment.text),
+            indexed,
+            aligned && widget.audioEnabled,
+          )
         : null;
+
+    return TextSpan(
+      text: segment.text,
+      recognizer: recognizer,
+      style: TextStyle(
+        color: indexed
+            ? widget.indexedWordColor ?? Theme.of(context).colorScheme.primary
+            : null,
+        backgroundColor: isActive
+            ? widget.highlightColor ??
+                  Theme.of(context).colorScheme.primaryContainer
+            : null,
+      ),
+    );
+  }
+
+  TextSpan _buildElanSpan(
+    BuildContext context,
+    ReadAlongWord segment,
+    GlobalKey sentenceKey,
+    int start,
+    bool isActive,
+  ) {
+    final matches = _wordPattern.allMatches(segment.text).toList();
+    final spans = <TextSpan>[];
+    var offset = 0;
+    for (final match in matches) {
+      if (match.start > offset) {
+        spans.add(TextSpan(text: segment.text.substring(offset, match.start)));
+      }
+      final word = match.group(0)!;
+      final indexed = _indexedWords.contains(unorm.nfc(word.toLowerCase()));
+      spans.add(
+        TextSpan(
+          text: word,
+          style: indexed
+              ? TextStyle(
+                  color:
+                      widget.indexedWordColor ??
+                      Theme.of(context).colorScheme.primary,
+                )
+              : null,
+          recognizer: indexed && widget.onWordTap != null
+              ? _wordRecognizer(
+                  segment,
+                  sentenceKey,
+                  start,
+                  match.start,
+                  match.end - match.start,
+                  unorm.nfc(word),
+                  true,
+                  matches.length == 1 &&
+                      segment.isAligned &&
+                      widget.audioEnabled,
+                )
+              : null,
+        ),
+      );
+      offset = match.end;
+    }
+    if (offset < segment.text.length) {
+      spans.add(TextSpan(text: segment.text.substring(offset)));
+    }
+    return TextSpan(
+      children: spans,
+      style: TextStyle(
+        backgroundColor: isActive
+            ? widget.highlightColor ??
+                  Theme.of(context).colorScheme.primaryContainer
+            : null,
+      ),
+    );
+  }
+
+  TapGestureRecognizer _wordRecognizer(
+    ReadAlongWord segment,
+    GlobalKey sentenceKey,
+    int start,
+    int offset,
+    int length,
+    String word,
+    bool indexed,
+    bool play,
+  ) {
+    final recognizer = _wordRecognizers.putIfAbsent((
+      segment,
+      offset,
+    ), TapGestureRecognizer.new);
     Offset? tapPosition;
-    recognizer?.onTapUp = (details) => tapPosition = details.globalPosition;
-    recognizer?.onTap = () {
-      if (aligned && widget.audioEnabled) {
+    recognizer.onTapUp = (details) => tapPosition = details.globalPosition;
+    recognizer.onTap = () {
+      if (play) {
         unawaited(widget.manager.playWordById(segment.id));
       }
       if (indexed && widget.onWordTap != null) {
@@ -533,8 +650,8 @@ class _ReaderPageState extends State<ReaderPage> {
         if (render is RenderParagraph) {
           final boxes = render.getBoxesForSelection(
             TextSelection(
-              baseOffset: start,
-              extentOffset: start + segment.text.length,
+              baseOffset: start + offset,
+              extentOffset: start + offset + length,
             ),
           );
           if (boxes.isNotEmpty) {
@@ -551,7 +668,7 @@ class _ReaderPageState extends State<ReaderPage> {
                 boxes.first;
             final rect = box.toRect();
             widget.onWordTap!(
-              segment.text,
+              word,
               Rect.fromPoints(
                 render.localToGlobal(rect.topLeft),
                 render.localToGlobal(rect.bottomRight),
@@ -563,19 +680,7 @@ class _ReaderPageState extends State<ReaderPage> {
       tapPosition = null;
     };
 
-    return TextSpan(
-      text: segment.text,
-      recognizer: recognizer,
-      style: TextStyle(
-        color: indexed
-            ? widget.indexedWordColor ?? Theme.of(context).colorScheme.primary
-            : null,
-        backgroundColor: isActive
-            ? widget.highlightColor ??
-                  Theme.of(context).colorScheme.primaryContainer
-            : null,
-      ),
-    );
+    return recognizer;
   }
 }
 
